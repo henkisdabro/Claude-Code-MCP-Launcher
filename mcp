@@ -1393,10 +1393,10 @@ launch_fzf_tui() {
     # Use printf to properly interpret escape sequences
     printf -v header "%b" "${shortcuts_line}
 ${COLOR_WHITE}Shortcuts:${COLOR_RESET}
-  ${COLOR_WHITE}[SPACE]${COLOR_RESET} Toggle  ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[ENTER]${COLOR_RESET} Save & Exit
-  ${COLOR_WHITE}[Ctrl-A]${COLOR_RESET} Add Server  ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[Ctrl-X]${COLOR_RESET} Remove Server
-  ${COLOR_WHITE}[Alt-E]${COLOR_RESET} Enable All  ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[Alt-D]${COLOR_RESET} Disable All
-  ${COLOR_WHITE}[ESC]${COLOR_RESET} Cancel
+${COLOR_CYAN}│${COLOR_RESET} ${COLOR_WHITE}[SPACE]${COLOR_RESET}  Toggle       ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[ENTER]${COLOR_RESET}  Save & Exit
+${COLOR_CYAN}│${COLOR_RESET} ${COLOR_WHITE}[Ctrl-A]${COLOR_RESET} Add Server   ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[Ctrl-X]${COLOR_RESET} Remove Server
+${COLOR_CYAN}│${COLOR_RESET} ${COLOR_WHITE}[Alt-E]${COLOR_RESET}  Enable All   ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[Alt-D]${COLOR_RESET}  Disable All
+${COLOR_CYAN}│${COLOR_RESET} ${COLOR_WHITE}[ESC]${COLOR_RESET}    Cancel
 ${shortcuts_line}"
 
     # Run fzf with dynamic bindings
