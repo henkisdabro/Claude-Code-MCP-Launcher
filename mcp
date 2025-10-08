@@ -85,6 +85,29 @@ msg_header() {
     echo -e "${COLOR_WHITE}${COLOR_CYAN}$*${COLOR_RESET}"
 }
 
+# Get safe terminal width for lines
+# Returns: width (defaults to 60 for narrow terminals)
+get_term_width() {
+    local cols
+    cols=$(tput cols 2>/dev/null || echo 80)
+    # Cap at reasonable max to prevent overflow, min at 60
+    if [[ $cols -gt 100 ]]; then
+        echo 80
+    elif [[ $cols -lt 60 ]]; then
+        echo 60
+    else
+        echo $((cols - 10))
+    fi
+}
+
+# Generate horizontal line with character
+# Args: $1 - character, $2 - width (optional, defaults to term width)
+gen_line() {
+    local char="${1:-─}"
+    local width="${2:-$(get_term_width)}"
+    printf '%*s' "$width" | tr ' ' "$char"
+}
+
 # ============================================================================
 # DEPENDENCY CHECKING
 # ============================================================================
@@ -1167,10 +1190,11 @@ generate_preview() {
         fi
     done <<< "$all_sources"
 
-    # Header with separator
-    echo "────────────────────────────────────────"
+    # Header with separator (fixed width for preview)
+    local preview_line=$(gen_line "─" 40)
+    echo "$preview_line"
     echo -e " ${COLOR_WHITE}$server${COLOR_RESET}"
-    echo "────────────────────────────────────────"
+    echo "$preview_line"
     echo ""
 
     # Source type
@@ -1201,11 +1225,12 @@ generate_preview() {
     if [[ "$source_type" == "direct-global" ]] || [[ "$source_type" == "direct-local" ]]; then
         if ! is_server_migrated "$server"; then
             # Direct server - always enabled
+            local warning_line=$(gen_line "═" 40)
             echo -e "  ${COLOR_YELLOW}⚠  Always Enabled${COLOR_RESET}"
             echo ""
-            echo -e "${COLOR_YELLOW}═══════════════════════════════════════${COLOR_RESET}"
+            echo -e "${COLOR_YELLOW}${warning_line}${COLOR_RESET}"
             echo -e "${COLOR_WHITE}Cannot be disabled in current location${COLOR_RESET}"
-            echo -e "${COLOR_YELLOW}═══════════════════════════════════════${COLOR_RESET}"
+            echo -e "${COLOR_YELLOW}${warning_line}${COLOR_RESET}"
             echo ""
             echo "To enable project-level control:"
             echo -e "  Press ${COLOR_CYAN}SPACE${COLOR_RESET} to migrate to ./.mcp.json"
@@ -1216,7 +1241,7 @@ generate_preview() {
             echo -e "  ${COLOR_GREEN}•${COLOR_RESET} Enable disable/enable toggling"
             echo -e "  ${COLOR_YELLOW}•${COLOR_RESET} Backup created automatically"
             echo ""
-            echo "────────────────────────────────────────"
+            echo "$preview_line"
             echo -e "Press ${COLOR_CYAN}SPACE${COLOR_RESET} to migrate and disable"
             return
         else
@@ -1238,10 +1263,10 @@ generate_preview() {
     echo ""
 
     # Write target
-    echo "────────────────────────────────────────"
+    echo "$preview_line"
     echo -e "${COLOR_YELLOW}Changes write to:${COLOR_RESET}"
     echo "  ./.claude/settings.local.json"
-    echo "────────────────────────────────────────"
+    echo "$preview_line"
     echo ""
     echo -e "Press ${COLOR_CYAN}SPACE${COLOR_RESET} to toggle"
 }
@@ -1315,7 +1340,7 @@ launch_fzf_tui() {
     export STATE_FILE
     export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_BLUE COLOR_CYAN COLOR_WHITE
     export MARK_ERROR MARK_SUCCESS MARK_WARNING MARK_INFO
-    export -f msg_header
+    export -f msg_header gen_line get_term_width
     export -f toggle_server generate_fzf_list add_server remove_server
     export -f enable_all_servers disable_all_servers
     export -f add_server_flow remove_server_flow msg_error msg_warning msg_success msg_info
@@ -1326,11 +1351,6 @@ launch_fzf_tui() {
     export -f migrate_server_to_project_mcpjson prompt_for_migration load_servers
 
     clear
-    msg_header "MCP Server Selector v${VERSION}"
-    echo -e "${COLOR_YELLOW}Write Target:${COLOR_RESET} ./.claude/settings.local.json"
-    echo -e "${COLOR_YELLOW}Controllable:${COLOR_RESET} Servers from .mcp.json files"
-    echo -e "${COLOR_YELLOW}Migration:${COLOR_RESET} Direct servers (from ~/.claude.json) can be migrated"
-    echo ""
 
     # Count servers by scope
     local total_count=0
@@ -1341,14 +1361,43 @@ launch_fzf_tui() {
 
     if [[ -f "$STATE_FILE" ]] && [[ -s "$STATE_FILE" ]]; then
         total_count=$(wc -l < "$STATE_FILE")
-        enabled_count=$(grep -c '^on:' "$STATE_FILE" || echo "0")
-        local_count=$(grep -c ':local:' "$STATE_FILE" || echo "0")
-        project_count=$(grep -c ':project:' "$STATE_FILE" || echo "0")
-        user_count=$(grep -c ':user:' "$STATE_FILE" || echo "0")
+        enabled_count=$(grep -c '^on:' "$STATE_FILE" 2>/dev/null || true)
+        local_count=$(grep -c ':local:' "$STATE_FILE" 2>/dev/null || true)
+        project_count=$(grep -c ':project:' "$STATE_FILE" 2>/dev/null || true)
+        user_count=$(grep -c ':user:' "$STATE_FILE" 2>/dev/null || true)
+        : ${enabled_count:=0}
+        : ${local_count:=0}
+        : ${project_count:=0}
+        : ${user_count:=0}
     fi
 
-    echo -e "${COLOR_CYAN}${total_count} total${COLOR_RESET}  │  ${COLOR_GREEN}${enabled_count} enabled${COLOR_RESET}  │  ${COLOR_BLUE}${local_count} local, ${project_count} project, ${user_count} user${COLOR_RESET}"
+    # Get terminal width for responsive layout
+    local term_width=$(get_term_width)
+    local title_line=$(gen_line "═" $term_width)
+
+    # Display header outside the fzf box
+    echo -e "${COLOR_GREEN}${title_line}${COLOR_RESET}"
+    echo -e "${COLOR_WHITE}  🔧 MCP SERVER SELECTOR v${VERSION}${COLOR_RESET} ${COLOR_GREEN}- Manage Claude Code MCP Servers${COLOR_RESET}"
+    echo -e "${COLOR_GREEN}${title_line}${COLOR_RESET}"
     echo ""
+    echo -e "${COLOR_CYAN}Write Target  :${COLOR_RESET} ./.claude/settings.local.json"
+    echo -e "${COLOR_CYAN}Controllable  :${COLOR_RESET} Servers from .mcp.json files"
+    echo -e "${COLOR_CYAN}Migration     :${COLOR_RESET} Direct servers (from ~/.claude.json) can be migrated"
+    echo ""
+    echo -e "${COLOR_WHITE}Total: ${COLOR_RESET}${total_count}  ${COLOR_WHITE}│${COLOR_RESET}  ${COLOR_GREEN}Enabled: ${COLOR_RESET}${enabled_count}  ${COLOR_WHITE}│${COLOR_RESET}  ${COLOR_BLUE}Local: ${COLOR_RESET}${local_count}  ${COLOR_WHITE}│${COLOR_RESET}  ${COLOR_BLUE}Project: ${COLOR_RESET}${project_count}  ${COLOR_WHITE}│${COLOR_RESET}  ${COLOR_BLUE}User: ${COLOR_RESET}${user_count}"
+    echo ""
+
+    # Shortcuts header inside fzf with color hierarchy
+    local shortcuts_line=$(gen_line "─" 52)
+    local header
+    # Use printf to properly interpret escape sequences
+    printf -v header "%b" "${shortcuts_line}
+${COLOR_WHITE}Shortcuts:${COLOR_RESET}
+  ${COLOR_WHITE}[SPACE]${COLOR_RESET} Toggle  ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[ENTER]${COLOR_RESET} Save & Exit
+  ${COLOR_WHITE}[Ctrl-A]${COLOR_RESET} Add Server  ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[Ctrl-X]${COLOR_RESET} Remove Server
+  ${COLOR_WHITE}[Alt-E]${COLOR_RESET} Enable All  ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[Alt-D]${COLOR_RESET} Disable All
+  ${COLOR_WHITE}[ESC]${COLOR_RESET} Cancel
+${shortcuts_line}"
 
     # Run fzf with dynamic bindings
     set +e  # Don't exit on fzf cancel
@@ -1362,11 +1411,9 @@ launch_fzf_tui() {
         --prompt="Filter: " \
         --pointer="▶" \
         --marker="→" \
-        --header="[SPACE] Toggle | [ENTER] Save & Exit | [ESC] Cancel
-[Ctrl-A] Add Server | [Ctrl-X] Remove Server
-[Alt-E] Enable All | [Alt-D] Disable All" \
+        --header="$header" \
         --preview="generate_preview {}" \
-        --preview-window="right:50%:wrap" \
+        --preview-window="right:40%:wrap" \
         --bind="space:execute(toggle_server {})+reload(generate_fzf_list)+refresh-preview" \
         --bind="alt-e:execute-silent(enable_all_servers)+reload(generate_fzf_list)+refresh-preview" \
         --bind="alt-d:execute-silent(disable_all_servers)+reload(generate_fzf_list)+refresh-preview" \
@@ -1377,7 +1424,7 @@ launch_fzf_tui() {
         --color="fg:#d0d0d0,bg:#121212,hl:#5fff87" \
         --color="fg+:#ffffff,bg+:#262626,hl+:#ffff00" \
         --color="info:#af87ff,prompt:#5fff87,pointer:#ff87d7" \
-        --color="marker:#00ff00,spinner:#ff87d7,header:#87afaf" \
+        --color="marker:#00ff00,spinner:#ff87d7,header:#5fff87" \
         > /dev/null
 
     local fzf_exit=$?
@@ -1397,7 +1444,8 @@ launch_fzf_tui() {
 
         # Show summary
         local new_enabled_count
-        new_enabled_count=$(grep -c '^on:' "$STATE_FILE" || echo "0")
+        new_enabled_count=$(grep -c '^on:' "$STATE_FILE" 2>/dev/null || true)
+        : ${new_enabled_count:=0}
 
         echo ""
         if [[ $new_enabled_count -eq 0 ]]; then
@@ -1440,13 +1488,13 @@ main() {
 
     # Launch TUI
     if launch_fzf_tui; then
-        # Success - launch Claude (unless in test mode)
+        # Success - launch Claude Code (unless in test mode)
         if [[ -n "${TEST_MODE:-}" ]]; then
-            msg_success "Test mode - skipping Claude launch"
+            msg_success "Test mode - skipping Claude Code launch"
             exit 0
         fi
 
-        msg_info "Launching Claude..."
+        msg_info "Launching Claude Code..."
         sleep 0.5
 
         # Find claude binary
