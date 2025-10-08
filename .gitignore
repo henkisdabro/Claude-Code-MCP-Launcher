@@ -1,3 +1,4 @@
 .mcp_migrations
 *.local.json
 .mcp.json
+marketing/
