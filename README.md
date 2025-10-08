@@ -1,4 +1,4 @@
-# MCP Server Selector
+# Claude Code MCP Server Selector
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-lightgrey.svg)]()
