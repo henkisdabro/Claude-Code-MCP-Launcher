@@ -12,7 +12,8 @@ set -euo pipefail
 readonly REPO_URL="https://github.com/henkisdabro/cc-mcp-launcher.git"
 readonly INSTALL_DIR="$HOME/.config/mcp-selector"
 readonly BIN_DIR="$HOME/.local/bin"
-readonly SYMLINK_PATH="$BIN_DIR/mcp"
+readonly SYMLINK_MCP="$BIN_DIR/mcp"
+readonly SYMLINK_CLAUDEMCP="$BIN_DIR/claudemcp"
 
 # Color codes
 readonly COLOR_RESET='\033[0m'
@@ -56,6 +57,80 @@ detect_os() {
     uname -s
 }
 
+detect_user_shell() {
+    if [[ -n "${SHELL:-}" ]]; then
+        basename "$SHELL"
+    else
+        echo "bash"  # Fallback
+    fi
+}
+
+get_shell_config() {
+    local shell
+    shell=$(detect_user_shell)
+
+    case "$shell" in
+        zsh)
+            echo "$HOME/.zshrc"
+            ;;
+        bash)
+            if [[ -f "$HOME/.bashrc" ]]; then
+                echo "$HOME/.bashrc"
+            else
+                echo "$HOME/.bash_profile"
+            fi
+            ;;
+        fish)
+            echo "$HOME/.config/fish/config.fish"
+            ;;
+        *)
+            echo "$HOME/.profile"
+            ;;
+    esac
+}
+
+add_to_path() {
+    local shell_config
+    shell_config=$(get_shell_config)
+    local shell
+    shell=$(detect_user_shell)
+
+    # Create backup
+    if [[ -f "$shell_config" ]]; then
+        local backup="${shell_config}.backup-$(date +%s)"
+        cp "$shell_config" "$backup"
+        msg_info "Created backup: $backup"
+    fi
+
+    # Check if PATH export already exists
+    if [[ -f "$shell_config" ]] && grep -q "export PATH=.*$BIN_DIR" "$shell_config" 2>/dev/null; then
+        msg_warning "PATH export already exists in $shell_config"
+        return 0
+    fi
+
+    # Add PATH export based on shell type
+    if [[ "$shell" == "fish" ]]; then
+        # Fish shell syntax
+        echo "" >> "$shell_config"
+        echo "# Added by MCP Selector installer" >> "$shell_config"
+        echo "set -gx PATH \"\$HOME/.local/bin\" \$PATH" >> "$shell_config"
+    else
+        # Bash/Zsh/POSIX syntax
+        echo "" >> "$shell_config"
+        echo "# Added by MCP Selector installer" >> "$shell_config"
+        echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$shell_config"
+    fi
+
+    msg_success "Added $BIN_DIR to PATH in $shell_config"
+    echo ""
+    echo -e "${COLOR_YELLOW}Reload your shell:${COLOR_RESET}"
+    if [[ "$shell" == "fish" ]]; then
+        echo "  source $shell_config"
+    else
+        echo "  source $shell_config"
+    fi
+}
+
 # ============================================================================
 # DEPENDENCY CHECKING
 # ============================================================================
@@ -81,6 +156,12 @@ check_dependencies() {
 
     case "$os" in
         Linux)
+            # Check for WSL
+            if grep -qi microsoft /proc/version 2>/dev/null; then
+                msg_info "WSL detected - packages can be installed via Linux package manager"
+                echo ""
+            fi
+
             if command -v apt &> /dev/null; then
                 echo -e "${COLOR_CYAN}Install with:${COLOR_RESET}"
                 echo "  sudo apt update && sudo apt install ${missing_deps[*]}"
@@ -93,6 +174,16 @@ check_dependencies() {
             elif command -v pacman &> /dev/null; then
                 echo -e "${COLOR_CYAN}Install with:${COLOR_RESET}"
                 echo "  sudo pacman -S ${missing_deps[*]}"
+            elif command -v zypper &> /dev/null; then
+                echo -e "${COLOR_CYAN}Install with:${COLOR_RESET}"
+                echo "  sudo zypper install ${missing_deps[*]}"
+            elif command -v apk &> /dev/null; then
+                echo -e "${COLOR_CYAN}Install with:${COLOR_RESET}"
+                echo "  sudo apk add ${missing_deps[*]}"
+            elif command -v nix-env &> /dev/null; then
+                echo -e "${COLOR_CYAN}Install with:${COLOR_RESET}"
+                echo "  nix-env -iA nixpkgs.${missing_deps[0]}"
+                [[ ${#missing_deps[@]} -gt 1 ]] && echo "  # Install other packages: ${missing_deps[*]:1}"
             else
                 echo -e "${COLOR_CYAN}Install using your system's package manager${COLOR_RESET}"
             fi
@@ -149,43 +240,79 @@ install_mcp_selector() {
         mkdir -p "$BIN_DIR"
     fi
 
-    # Remove existing symlink if present
-    if [[ -L "$SYMLINK_PATH" ]] || [[ -f "$SYMLINK_PATH" ]]; then
-        msg_warning "Removing existing symlink at $SYMLINK_PATH"
-        rm -f "$SYMLINK_PATH"
-    fi
+    # Remove existing symlinks if present
+    for symlink in "$SYMLINK_MCP" "$SYMLINK_CLAUDEMCP"; do
+        if [[ -L "$symlink" ]] || [[ -f "$symlink" ]]; then
+            msg_warning "Removing existing symlink at $symlink"
+            rm -f "$symlink"
+        fi
+    done
 
-    # Create symlink
-    msg_info "Creating symlink..."
-    ln -s "$INSTALL_DIR/mcp" "$SYMLINK_PATH"
+    # Create symlinks
+    msg_info "Creating symlinks..."
     chmod +x "$INSTALL_DIR/mcp"
-    msg_success "Symlink created: $SYMLINK_PATH → $INSTALL_DIR/mcp"
+    ln -s "$INSTALL_DIR/mcp" "$SYMLINK_MCP"
+    ln -s "$INSTALL_DIR/mcp" "$SYMLINK_CLAUDEMCP"
+    msg_success "Symlinks created:"
+    echo -e "  ${COLOR_CYAN}mcp${COLOR_RESET}       → $INSTALL_DIR/mcp"
+    echo -e "  ${COLOR_CYAN}claudemcp${COLOR_RESET} → $INSTALL_DIR/mcp"
     echo ""
 
     # Check if BIN_DIR is in PATH
     if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
         msg_warning "$BIN_DIR is not in your PATH"
         echo ""
-        echo "Add this line to your ~/.bashrc or ~/.zshrc:"
+        echo "Would you like to automatically add it to your shell configuration?"
         echo ""
-        echo -e "  ${COLOR_CYAN}export PATH=\"\$HOME/.local/bin:\$PATH\"${COLOR_RESET}"
-        echo ""
-        echo "Then reload your shell:"
-        echo -e "  ${COLOR_CYAN}source ~/.bashrc${COLOR_RESET}  (or source ~/.zshrc)"
-        echo ""
+
+        local response
+        read -rp "Add $BIN_DIR to PATH? (Y/n): " response
+
+        if [[ "$response" =~ ^[Nn]$ ]]; then
+            # User declined, show manual instructions
+            echo ""
+            msg_info "Manual setup instructions:"
+            echo ""
+            local shell_config
+            shell_config=$(get_shell_config)
+            local shell
+            shell=$(detect_user_shell)
+
+            if [[ "$shell" == "fish" ]]; then
+                echo "  Add this to $shell_config:"
+                echo -e "  ${COLOR_CYAN}set -gx PATH \"\$HOME/.local/bin\" \$PATH${COLOR_RESET}"
+            else
+                echo "  Add this to $shell_config:"
+                echo -e "  ${COLOR_CYAN}export PATH=\"\$HOME/.local/bin:\$PATH\"${COLOR_RESET}"
+            fi
+            echo ""
+            echo "  Then reload:"
+            echo -e "  ${COLOR_CYAN}source $shell_config${COLOR_RESET}"
+            echo ""
+        else
+            # User accepted, add automatically
+            echo ""
+            add_to_path
+            echo ""
+        fi
     fi
 
     # Success message
     msg_success "Installation complete!"
     echo ""
     echo -e "${COLOR_CYAN}Usage:${COLOR_RESET}"
-    echo "  Run ${COLOR_WHITE}mcp${COLOR_RESET} in any directory with a Claude project"
+    echo "  Run ${COLOR_WHITE}mcp${COLOR_RESET} or ${COLOR_WHITE}claudemcp${COLOR_RESET} in any directory with a Claude project"
     echo ""
-    echo -e "${COLOR_CYAN}Features:${COLOR_RESET}"
-    echo "  • ${COLOR_GREEN}SPACE${COLOR_RESET} - Toggle server on/off"
-    echo "  • ${COLOR_GREEN}ENTER${COLOR_RESET} - Save changes and launch Claude"
+    echo -e "${COLOR_CYAN}Workflow:${COLOR_RESET}"
+    echo "  1. Launch the selector with ${COLOR_WHITE}mcp${COLOR_RESET} or ${COLOR_WHITE}claudemcp${COLOR_RESET}"
+    echo "  2. Use ${COLOR_GREEN}SPACE${COLOR_RESET} to toggle servers on/off"
+    echo "  3. Press ${COLOR_GREEN}ENTER${COLOR_RESET} to save and automatically launch Claude Code"
+    echo ""
+    echo -e "${COLOR_CYAN}Additional Features:${COLOR_RESET}"
     echo "  • ${COLOR_GREEN}Ctrl-A${COLOR_RESET} - Add new server"
     echo "  • ${COLOR_GREEN}Ctrl-X${COLOR_RESET} - Remove server"
+    echo "  • ${COLOR_GREEN}Alt-E${COLOR_RESET} - Enable all servers"
+    echo "  • ${COLOR_GREEN}Alt-D${COLOR_RESET} - Disable all servers"
     echo "  • ${COLOR_GREEN}ESC${COLOR_RESET} - Cancel without saving"
     echo ""
 }
