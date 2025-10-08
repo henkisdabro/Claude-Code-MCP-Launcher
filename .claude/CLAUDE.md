@@ -17,12 +17,6 @@ This is a bash-based TUI (Text User Interface) tool for managing MCP (Model Cont
 - Atomically updates configuration using temp file + `mv` pattern
 - Automatically launches Claude after configuration changes
 
-**PRD Document: `prd.md`**
-- Comprehensive product requirements for v2.0 rework
-- Details planned architecture improvements for production-grade release
-- Includes cross-platform compatibility requirements (Linux/macOS)
-- Outlines installation/distribution plans
-
 ### Configuration Discovery
 
 Settings files are searched in priority order:
@@ -93,30 +87,6 @@ sed 's/\x1b\[[0-9;]*m//g'  # Remove ANSI codes
 sed 's/^\[ON \] *//'        # Remove state prefix
 ```
 
-## Planned v2.0 Improvements (from PRD)
-
-### Portability Issues to Address
-
-1. **`readlink -f` incompatibility**: GNU-specific, fails on macOS
-   - Implement portable `realpath_portable()` function
-
-2. **OS-specific package managers**: Need detection for apt/brew
-   - Use `uname` to detect Linux vs Darwin
-   - Provide tailored installation commands
-
-### Enhanced TUI Features
-
-1. **Dynamic state management**: Use temp state file + `reload` bindings
-2. **Preview window**: Show current vs pending server status
-3. **Key bindings**: Add `ctrl-a` (add server), `ctrl-x` (remove server)
-4. **Better visual feedback**: Separate current state from selection state
-
-### Installation/Distribution
-
-- Create `install.sh` for one-line installation
-- Support `curl ... | bash` distribution method
-- Clone to `$HOME/.config/mcp-selector`
-- Symlink to `$HOME/.local/bin/mcp`
 
 ## Important Notes
 
