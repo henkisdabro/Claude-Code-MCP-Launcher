@@ -1,0 +1,215 @@
+#!/bin/bash
+
+# MCP Server Selector for Claude Code
+# Colorful, fast TUI for enabling/disabling MCP servers
+
+set -euo pipefail
+
+# Find the real claude binary (not this script)
+CLAUDE_BIN=$(readlink -f ~/.local/bin/claude)
+
+# Check for dependencies
+for cmd in fzf jq; do
+    if ! command -v $cmd &> /dev/null; then
+        echo -e "\033[0;31m✗ $cmd is not installed!\033[0m"
+        echo -e "\033[1;33mInstall with: \033[0;36msudo apt install $cmd\033[0m"
+        echo -e "\033[0;34mLaunching Claude without MCP selector...\033[0m"
+        exec "$CLAUDE_BIN" "$@"
+    fi
+done
+
+# Determine which settings file to use (prioritize project settings)
+CURRENT_DIR="$(pwd)"
+SETTINGS=""
+SCOPE=""
+
+if [ -f "$CURRENT_DIR/.claude/settings.json" ]; then
+    SETTINGS="$CURRENT_DIR/.claude/settings.json"
+    SCOPE="project ($(basename "$CURRENT_DIR"))"
+elif [ -f "$HOME/.claude/settings.json" ]; then
+    SETTINGS="$HOME/.claude/settings.json"
+    SCOPE="global"
+else
+    echo -e "\033[0;31m✗ No settings file found\033[0m"
+    echo -e "\033[0;34mLaunching Claude...\033[0m"
+    exec "$CLAUDE_BIN" "$@"
+fi
+
+# Read current state
+ENABLED=$(jq -r '.enabledMcpjsonServers[]? // empty' "$SETTINGS" 2>/dev/null | sort)
+DISABLED=$(jq -r '.disabledMcpjsonServers[]? // empty' "$SETTINGS" 2>/dev/null | sort)
+
+# Create combined sorted list
+ALL_SERVERS=$(printf "%s\n%s" "$ENABLED" "$DISABLED" | sort -u | grep -v '^$' || true)
+
+if [ -z "$ALL_SERVERS" ]; then
+    echo -e "\033[1;33m⚠ No MCP servers found\033[0m"
+    echo -e "\033[0;34mLaunching Claude...\033[0m"
+    exec "$CLAUDE_BIN" "$@"
+fi
+
+# Count servers
+TOTAL_COUNT=$(echo "$ALL_SERVERS" | wc -l)
+ENABLED_COUNT=$([ -n "$ENABLED" ] && echo "$ENABLED" | wc -l || echo "0")
+
+# Show header
+clear
+echo -e "\033[1m\033[0;36mMCP Server Selector\033[0m \033[1;33m($SCOPE)\033[0m"
+echo -e "\033[0;36m${TOTAL_COUNT} total\033[0m  │  \033[0;32m${ENABLED_COUNT} currently enabled\033[0m"
+echo ""
+echo -e "\033[1;33mInstructions:\033[0m"
+echo -e "  • \033[0;32m[ON ]\033[0m = current state is enabled  │  \033[0;31m[OFF]\033[0m = current state is disabled"
+echo -e "  • \033[0;32m→\033[0m = selected to enable  │  \033[1;36mSPACE\033[0m = toggle  │  \033[1;36mENTER\033[0m = confirm"
+echo ""
+
+# Create formatted server list showing current state
+# Format: "[ON ] server-name" for enabled (green), "[OFF] server-name" for disabled (red)
+TEMP_LIST=$(mktemp)
+TEMP_ENABLED=$(mktemp)
+
+while IFS= read -r server; do
+    if [ -n "$ENABLED" ] && echo "$ENABLED" | grep -q "^${server}$"; then
+        echo -e "\033[0;32m[ON ]\033[0m ${server}" >> "$TEMP_LIST"
+        echo "$server" >> "$TEMP_ENABLED"
+    else
+        echo -e "\033[0;31m[OFF]\033[0m ${server}" >> "$TEMP_LIST"
+    fi
+done <<< "$ALL_SERVERS"
+
+# Run fzf - selected items in fzf = will be enabled (ON)
+# Items with green [ON] prefix will show current state
+# After toggle with SPACE, fzf shows which are selected for enable
+set +e
+
+# Use a temp file approach to handle pre-selection
+# Output all items, with enabled ones first so they get auto-selected by the binding trick
+if [ -s "$TEMP_ENABLED" ]; then
+    # Use fzf with explicit enter binding that only accepts marked items
+    cat "$TEMP_LIST" | \
+        fzf --multi \
+        --ansi \
+        --reverse \
+        --height=80% \
+        --border=none \
+        --prompt="Filter: " \
+        --pointer="▶" \
+        --marker="→" \
+        --bind="space:toggle" \
+        --bind="enter:execute-silent(printf '%s\n' {+} > /tmp/claude-mcp-selection.txt)+accept" \
+        --bind="start:execute-silent(sleep 0.001)" \
+        --color="fg:#d0d0d0,bg:#121212,hl:#5fff87" \
+        --color="fg+:#ffffff,bg+:#262626,hl+:#ffff00" \
+        --color="info:#af87ff,prompt:#5fff87,pointer:#ff87d7" \
+        --color="marker:#00ff00,spinner:#ff87d7,header:#87afaf" \
+        --header="SPACE to toggle  │  ENTER to confirm (ignores cursor position)" \
+        --layout=reverse-list \
+        < <({
+            # Output servers, with enabled ones showing [ON]
+            cat "$TEMP_LIST"
+        }) > /dev/null
+    FZF_EXIT=$?
+    # Read selections from temp file
+    if [ -f /tmp/claude-mcp-selection.txt ]; then
+        SELECTED=$(cat /tmp/claude-mcp-selection.txt)
+        rm -f /tmp/claude-mcp-selection.txt
+    else
+        SELECTED=""
+    fi
+else
+    cat "$TEMP_LIST" | \
+        fzf --multi \
+        --ansi \
+        --reverse \
+        --height=80% \
+        --border=none \
+        --prompt="Filter: " \
+        --pointer="▶" \
+        --marker="→" \
+        --bind="space:toggle" \
+        --bind="enter:execute-silent(printf '%s\n' {+} > /tmp/claude-mcp-selection.txt)+accept" \
+        --color="fg:#d0d0d0,bg:#121212,hl:#5fff87" \
+        --color="fg+:#ffffff,bg+:#262626,hl+:#ffff00" \
+        --color="info:#af87ff,prompt:#5fff87,pointer:#ff87d7" \
+        --color="marker:#00ff00,spinner:#ff87d7,header:#87afaf" \
+        --header="SPACE to toggle  │  ENTER to confirm (ignores cursor position)" > /dev/null
+    FZF_EXIT=$?
+    # Read selections from temp file
+    if [ -f /tmp/claude-mcp-selection.txt ]; then
+        SELECTED=$(cat /tmp/claude-mcp-selection.txt)
+        rm -f /tmp/claude-mcp-selection.txt
+    else
+        SELECTED=""
+    fi
+fi
+
+set -e
+
+# Cleanup
+rm -f "$TEMP_LIST" "$TEMP_ENABLED"
+
+# Handle cancellation (ESC pressed)
+if [ $FZF_EXIT -ne 0 ]; then
+    echo -e "\033[1;33m⚠ Cancelled\033[0m"
+    echo -e "\033[0;34mLaunching Claude...\033[0m"
+    sleep 0.5
+    exec "$CLAUDE_BIN" "$@"
+fi
+
+# Parse selected servers (newline-separated from fzf)
+# Strip ANSI codes and [ON ]/[OFF] prefixes to get clean server names
+if [ -z "$SELECTED" ]; then
+    # Nothing selected = disable all
+    NEW_ENABLED_JSON="[]"
+    NEW_DISABLED_JSON=$(printf '%s\n' "$ALL_SERVERS" | jq -R . | jq -s -c .)
+else
+    # Build enabled list from selections
+    # Strip ANSI codes, [ON ]/[OFF] prefixes, and ✓ markers
+    TEMP_ENABLED_PARSED=$(mktemp)
+    printf '%s\n' "$SELECTED" | \
+        sed 's/\x1b\[[0-9;]*m//g' | \
+        sed 's/^\[ON \] *//' | \
+        sed 's/^\[OFF\] *//' | \
+        sed 's/^     *//' | \
+        sort -u > "$TEMP_ENABLED_PARSED"
+
+    NEW_ENABLED_JSON=$(cat "$TEMP_ENABLED_PARSED" | jq -R . | jq -s -c .)
+
+    # Build disabled list (all servers not selected)
+    TEMP_DISABLED_PARSED=$(mktemp)
+    comm -23 \
+        <(printf '%s\n' "$ALL_SERVERS" | sort) \
+        <(sort "$TEMP_ENABLED_PARSED") \
+        > "$TEMP_DISABLED_PARSED"
+
+    NEW_DISABLED_JSON=$(cat "$TEMP_DISABLED_PARSED" | jq -R . | jq -s -c .)
+
+    rm -f "$TEMP_ENABLED_PARSED" "$TEMP_DISABLED_PARSED"
+fi
+
+# Update settings.json
+TMP_FILE=$(mktemp)
+jq --argjson enabled "$NEW_ENABLED_JSON" \
+   --argjson disabled "$NEW_DISABLED_JSON" \
+   '.enabledMcpjsonServers = $enabled | .disabledMcpjsonServers = $disabled' \
+   "$SETTINGS" > "$TMP_FILE"
+
+mv "$TMP_FILE" "$SETTINGS"
+
+# Show confirmation
+NEW_ENABLED_COUNT=$(echo "$NEW_ENABLED_JSON" | jq 'length')
+clear
+echo -e "\033[0;32m✓ Updated\033[0m"
+echo ""
+if [ "$NEW_ENABLED_COUNT" -eq 0 ]; then
+    echo -e "\033[1;33mNo servers enabled\033[0m"
+else
+    echo -e "\033[0;36mEnabled (${NEW_ENABLED_COUNT}):\033[0m"
+    echo "$NEW_ENABLED_JSON" | jq -r '.[]' | while read -r server; do
+        echo -e "  \033[0;32m✓\033[0m $server"
+    done
+fi
+echo ""
+echo -e "\033[0;34mLaunching Claude...\033[0m"
+sleep 1
+
+exec "$CLAUDE_BIN" "$@"
