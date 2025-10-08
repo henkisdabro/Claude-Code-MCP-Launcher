@@ -1,2 +1,3 @@
-.claude/
+.mcp_migrations
+*.local.json
 .mcp.json

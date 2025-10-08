@@ -572,16 +572,49 @@ load_servers() {
 # Check if server has already been migrated to ./.mcp.json
 # Args: $1 - server name
 # Returns: 0 if migrated, 1 if not
+# Validates actual migration state (not just tracking file)
 is_server_migrated() {
     local server="$1"
     local migrations_file="./.claude/.mcp_migrations"
+    local cwd=$(pwd)
 
-    if [[ -f "$migrations_file" ]]; then
-        grep -q "^$server:" "$migrations_file" 2>/dev/null
-        return $?
+    # Check if marked as migrated
+    if [[ ! -f "$migrations_file" ]] || ! grep -q "^$server:" "$migrations_file" 2>/dev/null; then
+        return 1
     fi
 
-    return 1
+    # Validate migration is still valid:
+    # 1. Server exists in ./.mcp.json
+    # 2. Server does NOT exist in ~/.claude.json (root or projects)
+
+    # Check if server exists in ./.mcp.json
+    if [[ -f "./.mcp.json" ]]; then
+        if ! jq -e --arg srv "$server" '.mcpServers[$srv]' "./.mcp.json" >/dev/null 2>&1; then
+            # Server not in ./.mcp.json, migration invalid
+            return 1
+        fi
+    else
+        # No ./.mcp.json file, migration invalid
+        return 1
+    fi
+
+    # Check if server still exists in ~/.claude.json (shouldn't if migrated)
+    if [[ -f "$HOME/.claude.json" ]]; then
+        # Check root .mcpServers
+        if jq -e --arg srv "$server" '.mcpServers[$srv]' "$HOME/.claude.json" >/dev/null 2>&1; then
+            # Server still in ~/.claude.json root, migration invalid
+            return 1
+        fi
+
+        # Check .projects[cwd].mcpServers
+        if jq -e --arg cwd "$cwd" --arg srv "$server" '.projects[$cwd].mcpServers[$srv]' "$HOME/.claude.json" >/dev/null 2>&1; then
+            # Server still in ~/.claude.json projects, migration invalid
+            return 1
+        fi
+    fi
+
+    # All checks passed - migration is valid
+    return 0
 }
 
 # Mark server as migrated
@@ -759,10 +792,11 @@ prompt_for_migration() {
     local source_type="$2"
     local source_file="$3"
 
-    # Redirect to tty to get input from user
-    exec < /dev/tty
+    # Redirect stdin and stdout to tty to show prompts in fzf context
+    exec < /dev/tty > /dev/tty
 
-    clear
+    echo ""
+    echo ""
     echo ""
     echo -e "${COLOR_YELLOW}═══════════════════════════════════════════════════${COLOR_RESET}"
     echo -e "${COLOR_WHITE}  Migration Required: ${COLOR_CYAN}$server${COLOR_RESET}"
@@ -771,7 +805,7 @@ prompt_for_migration() {
     echo "This server is defined in:"
     echo -e "  ${COLOR_CYAN}$source_file${COLOR_RESET}"
     echo ""
-    echo "Servers in this location are ${COLOR_RED}ALWAYS ENABLED${COLOR_RESET}."
+    echo -e "Servers in this location are ${COLOR_RED}ALWAYS ENABLED${COLOR_RESET}."
     echo ""
     echo "To disable it, this tool must:"
     echo -e "  ${COLOR_GREEN}1.${COLOR_RESET} MOVE definition → ${COLOR_CYAN}./.mcp.json${COLOR_RESET} (project)"
@@ -788,7 +822,7 @@ prompt_for_migration() {
     echo "      • Server becomes controllable in this project"
     echo "      • Server will be DISABLED after migration"
     echo "      • Global config is modified (backup created)"
-    echo "      • ${COLOR_CYAN}Recommended if you want project-level control${COLOR_RESET}"
+    echo -e "      • ${COLOR_CYAN}Recommended if you want project-level control${COLOR_RESET}"
     echo ""
     echo -e "  ${COLOR_BLUE}[v] View - Show server definition${COLOR_RESET}"
     echo "      • Displays the full JSON configuration"

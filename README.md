@@ -26,8 +26,9 @@ MCP Server Selector solves this with a simple workflow: exit Claude, run `claude
 - **Context Window Optimization** - Enable only the MCP servers you need, minimize token waste
 - **Interactive TUI** - Fast, intuitive interface powered by fzf
 - **Real-time Updates** - Toggle servers instantly with visual feedback
-- **Smart Configuration** - Automatically detects project vs global settings
-- **Safe by Design** - Never modifies global config without explicit consent
+- **Multi-Source Configuration** - Discovers and merges 7 configuration sources with scope precedence
+- **Smart Migration** - Automatically migrate global servers to project-level control
+- **Safe by Design** - Atomic updates, automatic backups, explicit consent for global changes
 - **Cross-Platform** - Works on Linux and macOS out of the box
 - **Zero Dependencies** - Just bash, fzf, and jq (easy to install)
 
@@ -64,7 +65,7 @@ The tool will:
 
 | Key | Action |
 |-----|--------|
-| `SPACE` | Toggle server on/off |
+| `SPACE` | Toggle server on/off (or trigger migration for always-on servers) |
 | `ENTER` | Save changes and launch Claude |
 | `ESC` | Cancel without saving |
 | `Ctrl-A` | Add new server |
@@ -72,6 +73,23 @@ The tool will:
 | `Alt-E` | Enable all servers |
 | `Alt-D` | Disable all servers |
 | `↑/↓` or `/` | Navigate and filter |
+
+### UI Indicators
+
+The TUI shows server status with color-coded indicators:
+
+| Indicator | Meaning | Source Type | Controllable? |
+|-----------|---------|-------------|---------------|
+| `[ON ]` (green) | Server enabled | MCPJSON (from `.mcp.json`) | ✅ Yes |
+| `[OFF]` (red) | Server disabled | MCPJSON (from `.mcp.json`) | ✅ Yes |
+| `[⚠ ]` (yellow) | Always enabled | Direct (from `~/.claude.json`) | ⚠️ Requires migration |
+
+**Scope labels** show where the server is defined:
+- `(local, mcpjson)` - Project-local, controllable
+- `(project, mcpjson)` - Project-shared, controllable
+- `(user, mcpjson)` - User-global, controllable
+- `(user, always-on)` - User-global, requires migration
+- `(local, always-on)` - Project-specific in global config, requires migration
 
 ## Recommended Workflow
 
@@ -88,22 +106,36 @@ This workflow ensures Claude's context is focused on your code and task, not fil
 
 ## Best Practices
 
-### Minimize Your Global Configuration
+### Organize Your Server Definitions
 
-After installing this tool, audit your global MCP server configuration:
+**Move servers to `.mcp.json` files for maximum control:**
+
+1. **Audit servers in** `~/.claude.json`:
+   ```bash
+   jq '.mcpServers | keys' ~/.claude.json
+   ```
+
+2. **Migrate to controllable format:**
+   - Run `mcp` in any project
+   - Look for servers marked with `[⚠]` (yellow, always-on)
+   - Press `SPACE` on any always-on server to trigger migration
+   - Tool will automatically move it to `./.mcp.json` with backup
+
+3. **Define new servers in** `.mcp.json` files:
+   - User-global servers → `~/.mcp.json`
+   - Project-specific servers → `./.mcp.json`
+   - Never add to `~/.claude.json` (they become always-on)
+
+### Minimize Default Enabled Servers
+
+After migrating your servers, keep your global settings minimal:
 
 ```bash
 # View your global enabled servers
-cat ~/.claude/settings.json | jq '.enabledMcpjsonServers'
+jq '.enabledMcpjsonServers' ~/.claude/settings.json
 ```
 
-**Recommendation:** Keep your global `~/.claude/settings.json` with minimal or zero enabled servers by default. Instead, use this tool to enable servers on a per-project, per-task basis. This ensures:
-
-- Clean context window when starting new projects
-- Explicit control over which tools are available
-- Maximum token efficiency across all your work
-
-**Example minimal global config:**
+**Recommendation:** Start with everything disabled by default:
 
 ```json
 {
@@ -117,7 +149,20 @@ cat ~/.claude/settings.json | jq '.enabledMcpjsonServers'
 }
 ```
 
-Then use `claudemcp` to enable only what you need, when you need it.
+Then use `mcp` to enable only what you need, per project, per task.
+
+### Project-Level Control
+
+For team projects, use version-controlled settings:
+
+1. **Define shared servers** in `./.mcp.json` (committed to git)
+2. **Set team defaults** in `./.claude/settings.json` (committed)
+3. **Personal overrides** go in `./.claude/settings.local.json` (gitignored)
+
+This ensures:
+- Team members have consistent server availability
+- Individual developers can optimize their own context
+- No conflicts from personal preferences
 
 ## Installation
 
@@ -206,49 +251,208 @@ nix-env -iA nixpkgs.fzf nixpkgs.jq
 
 Every MCP server you enable adds tool definitions to Claude's context window. With 20 servers enabled, you might be using 5,000+ tokens just on tool descriptions before your first prompt. This tool lets you manage this overhead by enabling servers only when needed.
 
-### Configuration Discovery
+### Configuration Architecture
 
-The tool searches for configuration files in this order:
+MCP Server Selector understands two separate but related concepts:
 
-1. `./.claude/settings.local.json` (project-specific, highest priority)
-2. `./.claude/settings.json` (legacy project-specific)
-3. New Project Flow (if global config exists but no local config)
+#### 1. Server Definitions (`mcpServers` object)
+
+These define **what** servers exist and **how** to run them:
+
+```json
+{
+  "mcpServers": {
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    },
+    "time": {
+      "command": "uvx",
+      "args": ["mcp-server-time"]
+    }
+  }
+}
+```
+
+**Can be defined in any of these files:**
+- `~/.claude.json` (user-global or project-specific via `.projects[cwd]`)
+- `~/.mcp.json` (user-global)
+- `./.mcp.json` (project-local)
+
+#### 2. Enable/Disable State (control arrays)
+
+These control **which** servers are active:
+
+```json
+{
+  "enabledMcpjsonServers": ["fetch", "time"],
+  "disabledMcpjsonServers": ["github", "notion"]
+}
+```
+
+**Can be configured in any of these files:**
+- `./.claude/settings.local.json` (project-local, highest priority)
+- `./.claude/settings.json` (project-shared)
+- `~/.claude/settings.local.json` (user-local)
+- `~/.claude/settings.json` (user-global)
+
+**Critical Limitation:** These arrays **only work** for servers defined in `.mcp.json` files. Servers defined directly in `~/.claude.json` are always enabled.
+
+### Seven Configuration Sources
+
+The tool discovers and merges all available configuration files:
+
+**LOCAL SCOPE** (highest priority):
+1. `./.claude/settings.local.json` - Project-local overrides (gitignored, **where changes are saved**)
+
+**PROJECT SCOPE**:
+2. `./.claude/settings.json` - Project-shared settings (version-controlled)
+3. `./.mcp.json` - Project MCP server definitions
+
+**USER SCOPE** (lowest priority):
+4. `~/.claude/settings.local.json` - User-local settings
+5. `~/.claude/settings.json` - User-global settings
+6. `~/.claude.json` - Main user configuration (definitions and project overrides)
+7. `~/.mcp.json` - User MCP server definitions
+
+### Server Types
+
+The tool categorizes servers into three types:
+
+#### MCPJSON Servers (Controllable)
+- **Source**: Defined in `.mcp.json` files
+- **Control**: Can be toggled via enable/disable arrays
+- **UI Indicator**: `[ON]` (green) or `[OFF]` (red)
+- **Label**: Shows scope and type, e.g., `[ON ] fetch (project, mcpjson)`
+
+#### Direct-Global Servers (Always Enabled)
+- **Source**: Defined in `~/.claude.json` root `.mcpServers`
+- **Control**: Always enabled, cannot be disabled without migration
+- **UI Indicator**: `[⚠]` (yellow) with "always-on" label
+- **Migration**: Can be migrated to `./.mcp.json` for project control
+
+#### Direct-Local Servers (Always Enabled)
+- **Source**: Defined in `~/.claude.json` `.projects[cwd].mcpServers`
+- **Control**: Always enabled, cannot be disabled without migration
+- **UI Indicator**: `[⚠]` (yellow) with "always-on" label
+- **Migration**: Can be migrated to `./.mcp.json` for project control
+
+### Dual Precedence Resolution
+
+The tool applies precedence **independently** for definitions and state:
+
+**Definition Precedence** (which server configuration to use):
+- Local > Project > User scope
+- If `fetch` defined in multiple files, the highest scope wins
+
+**State Precedence** (whether server is on/off):
+- Local > Project > User scope
+- If `fetch` enabled in one file but disabled in another, highest scope wins
+
+**Example:**
+```
+User scope: fetch defined with default args + enabled
+Project scope: fetch defined with custom args + disabled
+Result: Uses project definition (custom args) + disabled state
+Display: [OFF] fetch (project, mcpjson)
+```
+
+### Migration System
+
+When you try to disable a server marked with `[⚠]` (always-on), the tool offers to migrate it:
+
+**What migration does:**
+1. Creates timestamped backup of `~/.claude.json`
+2. Copies server definition to `./.mcp.json`
+3. Removes server from `~/.claude.json`
+4. Marks server as migrated (prevents re-prompting)
+5. Reloads server list - server is now controllable
+
+**Migration options:**
+- `[y]` Yes - Migrate and disable (recommended for project control)
+- `[v]` View - Show full server definition before deciding
+- `[n]` No - Keep enabled globally (cancel migration)
+
+**Safety features:**
+- Explicit user consent required
+- Automatic backups before modification
+- Atomic operations with validation
+- Automatic rollback on failure
 
 ### New Project Flow
 
-When you run `mcp` in a directory without local configuration, you'll be prompted to:
+When you run `mcp` in a directory without local configuration:
 
-1. **Create local config** - Copies global settings to `./.claude/settings.local.json` (recommended)
-2. **Use global for this session** - Skips TUI, launches Claude with global settings (read-only)
-3. **Abort** - Exit without making changes
+1. **Detects global config exists**
+2. **Prompts you to choose:**
+   - Create local config (copies global as template)
+   - Continue with global only (changes still saved locally)
+   - Abort
+3. **All changes save to** `./.claude/settings.local.json`
 
-**Important:** The tool will never modify your global `~/.claude/settings.json` file. All changes are saved to local project configs.
+**Important:** Changes are always saved to project-local settings, never to global configuration (unless you explicitly choose to migrate a server).
 
 ### State Management
 
-The tool uses a temporary state file to track changes, enabling instant UI updates without touching your settings file until you confirm. This means:
+The tool uses a temporary state file to track changes:
 
 - Blazing fast interactions (sub-50ms toggles)
 - Safe experimentation (cancel anytime with ESC)
 - Atomic writes (no partial updates or corruption)
+- Real-time preview updates
 
-### Configuration Format
+## Configuration Files Reference
 
-Settings are stored in JSON format:
+Understanding which files do what:
 
-```json
-{
-  "enabledMcpjsonServers": [
-    "fetch",
-    "time"
-  ],
-  "disabledMcpjsonServers": [
-    "alphavantage",
-    "chrome-devtools",
-    "notion"
-  ]
-}
-```
+### Server Definition Files
+
+These files contain `mcpServers` objects that define what servers exist and how to run them:
+
+| File | Scope | Purpose | Controllable? |
+|------|-------|---------|---------------|
+| `~/.claude.json` (root `.mcpServers`) | User | Global server definitions | ❌ Always enabled |
+| `~/.claude.json` (`.projects[cwd].mcpServers`) | Local | Project-specific definitions in global file | ❌ Always enabled |
+| `~/.mcp.json` | User | User-global MCPJSON servers | ✅ Via enable/disable arrays |
+| `./.mcp.json` | Project | Project-local MCPJSON servers | ✅ Via enable/disable arrays |
+
+### Control Files (Enable/Disable Arrays)
+
+These files contain `enabledMcpjsonServers` and `disabledMcpjsonServers` arrays that control which MCPJSON servers are active:
+
+| File | Scope | Purpose | Priority |
+|------|-------|---------|----------|
+| `./.claude/settings.local.json` | Local | **Where this tool saves changes** (gitignored) | Highest |
+| `./.claude/settings.json` | Project | Shared project settings (version-controlled) | Medium-High |
+| `~/.claude/settings.local.json` | User | User-local overrides | Medium-Low |
+| `~/.claude/settings.json` | User | User-global settings | Lowest |
+
+### Which Files Control What?
+
+**For MCPJSON servers** (defined in `.mcp.json` files):
+- **Definition** comes from: Highest scope `.mcp.json` file (local > project > user)
+- **State** (on/off) comes from: Highest scope settings file with enable/disable arrays
+
+**For Direct servers** (defined in `~/.claude.json`):
+- **Definition** comes from: `~/.claude.json` (root or `.projects[cwd]`)
+- **State**: Always enabled, cannot be controlled via arrays
+- **To control**: Must migrate to `./.mcp.json` first (tool handles this automatically)
+
+### Recommended File Organization
+
+**For maximum flexibility and control:**
+
+1. **Define servers in** `.mcp.json` files (not `~/.claude.json`)
+   - User-global servers → `~/.mcp.json`
+   - Project-specific servers → `./.mcp.json`
+
+2. **Control servers via** settings files
+   - Let this tool manage `./.claude/settings.local.json`
+   - Or manually edit enable/disable arrays
+
+3. **Migrate existing direct servers**
+   - Use this tool to migrate servers from `~/.claude.json` to `./.mcp.json`
+   - Gain project-level control over previously global servers
 
 ## Uninstall
 
@@ -297,6 +501,41 @@ The tool looks for Claude in:
 
 Make sure Claude Code is properly installed.
 
+### Server shows [⚠] (always-on) indicator
+
+This means the server is defined in `~/.claude.json` and cannot be disabled via enable/disable arrays. To gain control:
+
+1. Press `SPACE` on the server to trigger migration
+2. Choose `[y]` to migrate (tool creates automatic backup)
+3. Server moves to `./.mcp.json` and becomes controllable
+
+Alternatively, choose `[n]` to keep the server enabled globally.
+
+### Migration failed or want to rollback
+
+If migration fails, the tool automatically restores from backup. To manually rollback:
+
+```bash
+# Find backup files
+ls -lt ~/.claude.json.backup.*
+
+# Restore specific backup
+cp ~/.claude.json.backup.YYYYMMDD_HHMMSS ~/.claude.json
+```
+
+Backups are timestamped and created before any modification to `~/.claude.json`.
+
+### Changes not taking effect
+
+After saving changes with `ENTER`:
+
+1. Tool automatically launches Claude with new settings
+2. If Claude was already running, exit and run `mcp` again
+3. Check that changes were saved to `./.claude/settings.local.json`:
+   ```bash
+   jq '.enabledMcpjsonServers' ./.claude/settings.local.json
+   ```
+
 ## Development
 
 ### Project Structure
@@ -335,6 +574,62 @@ Run the tool:
 3. **Clarity** - Always show current vs pending state
 4. **Portability** - Works on Linux + macOS without modification
 5. **Explicitness** - Prompt before creating or modifying configurations
+
+## Quick Reference
+
+### File Roles Cheat Sheet
+
+| File | Contains | Controls What | Priority |
+|------|----------|---------------|----------|
+| `./.claude/settings.local.json` | Enable/disable arrays | MCPJSON servers on/off | **Highest** (tool writes here) |
+| `./.mcp.json` | Server definitions | Project server configs | High (project scope) |
+| `~/.claude.json` | Server definitions | Global/project servers | Medium (always-on unless migrated) |
+| `~/.mcp.json` | Server definitions | User-global servers | Medium (controllable) |
+| `~/.claude/settings.json` | Enable/disable arrays | MCPJSON servers on/off | Low (user-global) |
+
+### Server Type Quick Lookup
+
+```
+[ON ] fetch (project, mcpjson)  → Defined in ./.mcp.json, can toggle on/off
+[OFF] time (user, mcpjson)      → Defined in ~/.mcp.json, can toggle on/off
+[⚠ ] github (user, always-on)   → Defined in ~/.claude.json, needs migration
+```
+
+### Common Commands
+
+```bash
+# Launch tool
+mcp         # Short command
+claudemcp   # Descriptive command
+
+# Check server definitions
+jq '.mcpServers | keys' ~/.claude.json      # Global direct servers (always-on)
+jq '.mcpServers | keys' ~/.mcp.json         # Global MCPJSON servers
+jq '.mcpServers | keys' ./.mcp.json         # Project MCPJSON servers
+
+# Check enabled/disabled state
+jq '.enabledMcpjsonServers' ./.claude/settings.local.json   # Local overrides
+jq '.disabledMcpjsonServers' ./.claude/settings.local.json  # Local overrides
+
+# Find migration backups
+ls -lt ~/.claude.json.backup.*
+```
+
+### Decision Tree
+
+**When adding a new server:**
+1. ✅ Define in `./.mcp.json` (project) or `~/.mcp.json` (user)
+2. ❌ Don't define in `~/.claude.json` (becomes always-on)
+
+**When you see [⚠]:**
+1. Server is always enabled (can't toggle off)
+2. Press SPACE → choose [y] to migrate
+3. Server moves to `./.mcp.json` → becomes controllable
+
+**When setting defaults:**
+1. Disable all servers globally: `~/.claude/settings.json`
+2. Enable per-project: Let this tool manage `./.claude/settings.local.json`
+3. Team defaults: `./.claude/settings.json` (committed to git)
 
 ## Credits
 
