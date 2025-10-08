@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="MCP Server Selector - Optimize your Claude Code context window by enabling only the MCP servers you need. Fast TUI for managing Model Context Protocol servers.">
+    <meta name="keywords" content="Claude Code, MCP, Model Context Protocol, context window, optimization, TUI">
+    <meta name="author" content="Henrik Söderlund">
+
+    <!-- Open Graph / Social Media -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="MCP Server Selector - Optimize Your Claude Context">
+    <meta property="og:description" content="Stop wasting tokens on unused tools. Fast TUI to enable only the MCP servers you need.">
+    <meta property="og:url" content="https://henkisdabro.github.io/cc-mcp-launcher/">
+
+    <title>MCP Server Selector - Optimize Your Claude Context</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="nav">
+        <div class="container nav-container">
+            <div class="nav-brand">
+                <span class="brand-icon">⚡</span>
+                <span class="brand-text">MCP Server Selector</span>
+            </div>
+            <div class="nav-links">
+                <a href="#features" class="nav-link">Features</a>
+                <a href="#demo" class="nav-link">Demo</a>
+                <a href="#install" class="nav-link">Install</a>
+                <a href="https://github.com/henkisdabro/cc-mcp-launcher" target="_blank" class="nav-link nav-link-github">
+                    <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path>
+                    </svg>
+                    GitHub
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero" id="hero">
+        <div class="container hero-container">
+            <div class="hero-content">
+                <h1 class="hero-title">
+                    Your Claude Context is Drowning in Unused Tools
+                </h1>
+                <p class="hero-subtitle">
+                    Every enabled MCP server bloats your context window with tool definitions, wasting precious tokens before you even start working.
+                </p>
+                <div class="hero-stats">
+                    <div class="stat">
+                        <span class="stat-value">20+ servers</span>
+                        <span class="stat-label">5,000+ wasted tokens</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value">Every session</span>
+                        <span class="stat-label">Reduced context capacity</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value">Every response</span>
+                        <span class="stat-label">Slower, more expensive</span>
+                    </div>
+                </div>
+                <div class="hero-ctas">
+                    <a href="#install" class="btn btn-primary">Get Started</a>
+                    <a href="#demo" class="btn btn-secondary">View Demo</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Problem Section -->
+    <section class="section section-problem" id="problem">
+        <div class="container">
+            <h2 class="section-title">The Context Window Problem</h2>
+            <p class="section-intro">
+                Every MCP server you enable adds hundreds of tokens to Claude's context before your first prompt. With 20 servers enabled, you're wasting thousands of tokens on tools you're not using.
+            </p>
+            <div class="problem-grid">
+                <div class="problem-card">
+                    <div class="problem-icon">📊</div>
+                    <h3>Wasted Tokens</h3>
+                    <p>Tool descriptions, parameters, and usage notes consume your token budget on irrelevant features.</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">🔻</div>
+                    <h3>Reduced Context</h3>
+                    <p>Less space for your actual code, conversations, and the work that matters.</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">🐌</div>
+                    <h3>Slower & Costlier</h3>
+                    <p>Processing unnecessary tool information slows responses and inflates costs.</p>
+                </div>
+            </div>
+            <div class="problem-example">
+                <p class="example-question">Debugging authentication? Do you really need 15 other tool definitions taking up space?</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Solution Section -->
+    <section class="section section-solution" id="solution">
+        <div class="container">
+            <h2 class="section-title">MCP Server Selector: Context Window Optimization</h2>
+            <p class="section-intro">
+                A fast, beautiful TUI that lets you enable only the MCP servers you need, when you need them. Toggle servers with a keypress and launch Claude with an optimized context window—all in under a second.
+            </p>
+            <div class="solution-value">
+                <div class="value-prop">
+                    <span class="value-icon">⚡</span>
+                    <div>
+                        <h3>Instant Control</h3>
+                        <p>Sub-second launch. Toggle any server on/off with SPACE. Save and launch with ENTER.</p>
+                    </div>
+                </div>
+                <div class="value-prop">
+                    <span class="value-icon">🎯</span>
+                    <div>
+                        <h3>Minimal Context</h3>
+                        <p>Enable only 2-3 servers per session. Keep Claude focused on your code, not unused tools.</p>
+                    </div>
+                </div>
+                <div class="value-prop">
+                    <span class="value-icon">🔒</span>
+                    <div>
+                        <h3>Safe by Design</h3>
+                        <p>Atomic updates, automatic backups, explicit consent for changes. Never corrupt your config.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Demo Section -->
+    <section class="section section-demo" id="demo">
+        <div class="container">
+            <h2 class="section-title">See It In Action</h2>
+            <div class="demo-container">
+                <img src="demo.gif" alt="MCP Server Selector TUI Demo" class="demo-image">
+                <p class="demo-caption">Interactive TUI powered by fzf - toggle servers instantly with visual feedback</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section class="section section-features" id="features">
+        <div class="container">
+            <h2 class="section-title">Features</h2>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">🎯</div>
+                    <h3>Context Optimization</h3>
+                    <p>Enable only the servers you need. Minimize token waste and maximize effective context for your work.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">⚡</div>
+                    <h3>Interactive TUI</h3>
+                    <p>Fast, intuitive interface powered by fzf. Navigate, filter, and toggle with keyboard shortcuts.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔄</div>
+                    <h3>Real-time Updates</h3>
+                    <p>Toggle servers instantly with visual feedback. Preview window shows current vs pending state.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">📁</div>
+                    <h3>Multi-Source Config</h3>
+                    <p>Discovers and merges 7 configuration sources with smart scope precedence (local → project → user).</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔀</div>
+                    <h3>Smart Migration</h3>
+                    <p>Automatically migrate global servers to project-level control with backup and rollback protection.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔒</div>
+                    <h3>Safe by Design</h3>
+                    <p>Atomic writes, automatic backups, JSON validation. Explicit consent before global changes.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- How It Works Section -->
+    <section class="section section-workflow" id="workflow">
+        <div class="container">
+            <h2 class="section-title">Your New Workflow</h2>
+            <p class="section-intro">Optimize your context in seconds, every time you start a new task</p>
+            <div class="workflow-steps">
+                <div class="workflow-step">
+                    <div class="step-number">1</div>
+                    <div class="step-content">
+                        <h3>Exit Claude Code</h3>
+                        <p>If Claude is currently running, exit to refresh with new settings</p>
+                    </div>
+                </div>
+                <div class="workflow-step">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                        <h3>Run <code>claudemcp</code></h3>
+                        <p>Launch the TUI in your project directory</p>
+                    </div>
+                </div>
+                <div class="workflow-step">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                        <h3>Enable What You Need</h3>
+                        <p>Press SPACE to toggle. Only enable 2-3 servers for your current task</p>
+                    </div>
+                </div>
+                <div class="workflow-step">
+                    <div class="step-number">4</div>
+                    <div class="step-content">
+                        <h3>Launch & Work</h3>
+                        <p>Press ENTER to save and auto-launch Claude with optimized context</p>
+                    </div>
+                </div>
+            </div>
+            <div class="workflow-tip">
+                <strong>Pro tip:</strong> Working on web APIs? Enable <code>fetch</code>. Debugging timezones? Enable <code>time</code>. Keep it minimal for maximum efficiency.
+            </div>
+        </div>
+    </section>
+
+    <!-- Installation Section -->
+    <section class="section section-install" id="install">
+        <div class="container">
+            <h2 class="section-title">Get Started</h2>
+            <div class="install-container">
+                <div class="install-method">
+                    <h3>One-Line Install</h3>
+                    <div class="code-block">
+                        <code id="install-command">curl -fsSL https://raw.githubusercontent.com/henkisdabro/cc-mcp-launcher/main/install.sh | bash</code>
+                        <button class="copy-btn" data-target="install-command">Copy</button>
+                    </div>
+                    <p class="install-note">The installer will check for dependencies (fzf, jq) and set up symlinks automatically.</p>
+                </div>
+
+                <div class="install-usage">
+                    <h3>Usage</h3>
+                    <div class="usage-commands">
+                        <div class="command-example">
+                            <code>mcp</code>
+                            <span class="command-desc">Short command</span>
+                        </div>
+                        <div class="command-example">
+                            <code>claudemcp</code>
+                            <span class="command-desc">Descriptive command (same functionality)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="keybindings">
+                    <h3>Keybindings</h3>
+                    <div class="keybindings-grid">
+                        <div class="keybinding">
+                            <kbd>SPACE</kbd>
+                            <span>Toggle server on/off</span>
+                        </div>
+                        <div class="keybinding">
+                            <kbd>ENTER</kbd>
+                            <span>Save changes & launch Claude</span>
+                        </div>
+                        <div class="keybinding">
+                            <kbd>ESC</kbd>
+                            <span>Cancel without saving</span>
+                        </div>
+                        <div class="keybinding">
+                            <kbd>Ctrl-A</kbd>
+                            <span>Add new server</span>
+                        </div>
+                        <div class="keybinding">
+                            <kbd>Ctrl-X</kbd>
+                            <span>Remove selected server</span>
+                        </div>
+                        <div class="keybinding">
+                            <kbd>Alt-E</kbd>
+                            <span>Enable all servers</span>
+                        </div>
+                        <div class="keybinding">
+                            <kbd>Alt-D</kbd>
+                            <span>Disable all servers</span>
+                        </div>
+                        <div class="keybinding">
+                            <kbd>↑/↓ or /</kbd>
+                            <span>Navigate & filter</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Community Section -->
+    <section class="section section-community" id="community">
+        <div class="container">
+            <h2 class="section-title">Free for the Claude Code Community</h2>
+            <p class="section-intro">
+                Open source and MIT licensed. Built to solve a real problem for developers like you.
+            </p>
+            <div class="community-actions">
+                <a href="https://github.com/henkisdabro/cc-mcp-launcher" target="_blank" class="btn btn-primary">
+                    <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path>
+                    </svg>
+                    View on GitHub
+                </a>
+                <a href="https://github.com/henkisdabro/cc-mcp-launcher#readme" target="_blank" class="btn btn-secondary">
+                    Read Documentation
+                </a>
+            </div>
+            <div class="community-links">
+                <a href="https://github.com/henkisdabro/cc-mcp-launcher/issues" target="_blank">Report Issues</a>
+                <span class="separator">•</span>
+                <a href="https://github.com/henkisdabro/cc-mcp-launcher/blob/main/LICENSE" target="_blank">MIT License</a>
+                <span class="separator">•</span>
+                <a href="https://github.com/henkisdabro/cc-mcp-launcher#troubleshooting" target="_blank">Troubleshooting</a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container footer-container">
+            <div class="footer-content">
+                <p class="footer-credit">
+                    Built by <a href="https://www.henriksoderlund.com" target="_blank">Henrik Söderlund</a> in Perth, Australia
+                </p>
+                <p class="footer-tech">
+                    Powered by <a href="https://github.com/junegunn/fzf" target="_blank">fzf</a> and
+                    <a href="https://stedolan.github.io/jq/" target="_blank">jq</a>
+                </p>
+            </div>
+            <div class="footer-links">
+                <a href="https://github.com/henkisdabro/cc-mcp-launcher" target="_blank">GitHub</a>
+                <span class="separator">•</span>
+                <a href="https://github.com/henkisdabro/cc-mcp-launcher#readme" target="_blank">Docs</a>
+                <span class="separator">•</span>
+                <a href="mailto:admin@henriksoderlund.com">Contact</a>
+            </div>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>

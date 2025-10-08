@@ -4,6 +4,8 @@
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-lightgrey.svg)]()
 [![Shell](https://img.shields.io/badge/Shell-Bash-green.svg)]()
 
+**[🌐 Visit Website](https://henkisdabro.github.io/cc-mcp-launcher/)** | **[📖 Documentation](#readme)** | **[⚡ Quick Start](#quick-start)**
+
 A fast, beautiful TUI for managing MCP (Model Context Protocol) servers in Claude Code. Optimize your context window by enabling only the servers you need, when you need them.
 
 ![MCP Server Selector Screenshot](tui_screen_recording.gif)
