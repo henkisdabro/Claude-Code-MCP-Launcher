@@ -779,12 +779,28 @@ prompt_for_migration() {
     echo -e "  ${COLOR_GREEN}3.${COLOR_RESET} Disable via → ${COLOR_CYAN}./.claude/settings.local.json${COLOR_RESET}"
     echo ""
     echo -e "${COLOR_YELLOW}⚠ This MODIFIES your global config!${COLOR_RESET}"
-    echo -e "  (A backup will be created first)"
+    echo -e "  (A timestamped backup will be created first)"
     echo ""
-    echo "Options:"
-    echo -e "  ${COLOR_GREEN}[y]${COLOR_RESET} Migrate and disable (recommended)"
-    echo -e "  ${COLOR_BLUE}[v]${COLOR_RESET} View full server definition first"
-    echo -e "  ${COLOR_RED}[n]${COLOR_RESET} Keep enabled globally (cancel)"
+    echo -e "${COLOR_WHITE}What would you like to do?${COLOR_RESET}"
+    echo ""
+    echo -e "  ${COLOR_GREEN}[y] Yes - Migrate and disable${COLOR_RESET}"
+    echo "      • Performs all 3 steps above automatically"
+    echo "      • Server becomes controllable in this project"
+    echo "      • Server will be DISABLED after migration"
+    echo "      • Global config is modified (backup created)"
+    echo "      • ${COLOR_CYAN}Recommended if you want project-level control${COLOR_RESET}"
+    echo ""
+    echo -e "  ${COLOR_BLUE}[v] View - Show server definition${COLOR_RESET}"
+    echo "      • Displays the full JSON configuration"
+    echo "      • Helps you understand what will be migrated"
+    echo "      • You can decide after viewing"
+    echo "      • No changes made until you confirm"
+    echo ""
+    echo -e "  ${COLOR_RED}[n] No - Keep enabled globally${COLOR_RESET}"
+    echo "      • Cancels migration process"
+    echo "      • Server remains in $source_file"
+    echo "      • Server stays ALWAYS ENABLED"
+    echo "      • No changes made to any files"
     echo ""
 
     while true; do
@@ -1264,6 +1280,8 @@ launch_fzf_tui() {
     # Export functions and variables for fzf subshells
     export STATE_FILE
     export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_BLUE COLOR_CYAN COLOR_WHITE
+    export MARK_ERROR MARK_SUCCESS MARK_WARNING MARK_INFO
+    export -f msg_header
     export -f toggle_server generate_fzf_list add_server remove_server
     export -f enable_all_servers disable_all_servers
     export -f add_server_flow remove_server_flow msg_error msg_warning msg_success msg_info
@@ -1315,7 +1333,7 @@ launch_fzf_tui() {
 [Alt-E] Enable All | [Alt-D] Disable All" \
         --preview="generate_preview {}" \
         --preview-window="right:50%:wrap" \
-        --bind="space:execute-silent(toggle_server {})+reload(generate_fzf_list)+refresh-preview" \
+        --bind="space:execute(toggle_server {})+reload(generate_fzf_list)+refresh-preview" \
         --bind="alt-e:execute-silent(enable_all_servers)+reload(generate_fzf_list)+refresh-preview" \
         --bind="alt-d:execute-silent(disable_all_servers)+reload(generate_fzf_list)+refresh-preview" \
         --bind="ctrl-a:execute(add_server_flow)+reload(generate_fzf_list)+refresh-preview" \
