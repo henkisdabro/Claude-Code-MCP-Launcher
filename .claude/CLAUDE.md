@@ -133,16 +133,16 @@ Display: [OFF] fetch (project)
 No automated tests currently exist. Manual testing workflow:
 ```bash
 # Run the script directly
-./cc-mcp-launcher
+./mcp
 
-# Test with sample settings.json (see prd.md section 7.0 for sample)
+# Test with sample settings.json
 ```
 
 ### Validation
 
 ```bash
 # Check bash syntax
-bash -n cc-mcp-launcher
+bash -n mcp
 
 # Verify dependencies
 command -v fzf jq

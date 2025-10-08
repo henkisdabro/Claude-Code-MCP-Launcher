@@ -1,16 +1,16 @@
-# MCP Server Selector
+# Claude Code MCP Server Selector
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-lightgrey.svg)]()
 [![Shell](https://img.shields.io/badge/Shell-Bash-green.svg)]()
 
-**[🌐 Visit Website](https://henkisdabro.github.io/Claude-Code-MCP-Launcher/)** | **[📖 Documentation](#readme)** | **[⚡ Quick Start](#quick-start)**
+**[🌐 Visit Website](https://henkisdabro.github.io/Claude-Code-MCP-Server-Selector/)** | **[📖 Documentation](#readme)** | **[⚡ Quick Start](#quick-start)**
 
 A fast, beautiful TUI for managing MCP (Model Context Protocol) servers in Claude Code. Optimize your context window by enabling only the servers you need, when you need them.
 
 ![MCP Server Selector Screenshot](/docs/demo.gif)
 
-## Why MCP Server Selector?
+## Why Claude Code MCP Server Selector?
 
 **Every enabled MCP server bloats your Claude Code context window with tool descriptions, parameters, and usage notes—wasting precious tokens on tools you're not using.**
 
@@ -28,7 +28,7 @@ This means:
 - **Severe performance impact** - Processing hundreds of unused tools slows every response
 - **Dramatically higher costs** - Paying for 2-5x more tokens than necessary
 
-MCP Server Selector solves this: exit Claude, run `mcp`, enable only the 1-3 servers you need for your current task, and launch Claude with a minimal, optimized context window. Toggle servers with a keypress, see changes in real-time, and launch with optimal settings—all in under a second.
+Claude Code MCP Server Selector solves this: exit Claude, run `mcp`, enable only the 1-3 servers you need for your current task, and launch Claude with a minimal, optimized context window. Toggle servers with a keypress, see changes in real-time, and launch with optimal settings—all in under a second.
 
 ## Features
 
@@ -48,7 +48,7 @@ MCP Server Selector solves this: exit Claude, run `mcp`, enable only the 1-3 ser
 One-line install (recommended):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/henkisdabro/cc-mcp-launcher/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/henkisdabro/Claude-Code-MCP-Server-Selector/main/install.sh | bash
 ```
 
 ### Usage
@@ -186,7 +186,7 @@ The tool requires three lightweight dependencies:
 ### One-Line Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/henkisdabro/cc-mcp-launcher/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/henkisdabro/Claude-Code-MCP-Server-Selector/main/install.sh | bash
 ```
 
 The installer will:
@@ -200,7 +200,7 @@ The installer will:
 
 ```bash
 # Clone the repository
-git clone https://github.com/henkisdabro/cc-mcp-launcher.git ~/.config/mcp-selector
+git clone https://github.com/henkisdabro/Claude-Code-MCP-Server-Selector.git ~/.config/mcp-selector
 
 # Create symlinks
 ln -s ~/.config/mcp-selector/mcp ~/.local/bin/mcp
@@ -277,7 +277,7 @@ This tool lets you enable servers only when needed. Disable unnecessary servers 
 
 ### Configuration Architecture
 
-MCP Server Selector understands two separate but related concepts:
+Claude Code MCP Server Selector understands two separate but related concepts:
 
 #### 1. Server Definitions (`mcpServers` object)
 
@@ -480,7 +480,7 @@ These files contain `enabledMcpjsonServers` and `disabledMcpjsonServers` arrays 
 
 ## Uninstall
 
-To completely remove MCP Server Selector:
+To completely remove Claude Code MCP Server Selector:
 
 ```bash
 # Remove symlinks
@@ -565,7 +565,7 @@ After saving changes with `ENTER`:
 ### Project Structure
 
 ```
-cc-mcp-launcher/
+Claude-Code-MCP-Server-Selector/
 ├── mcp              # Main executable
 ├── install.sh       # Installation script
 ├── README.md        # This file

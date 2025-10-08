@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# MCP Server Selector - Installation Script
-# One-line install: curl -fsSL https://raw.githubusercontent.com/henkisdabro/cc-mcp-launcher/main/install.sh | bash
+# Claude Code MCP Server Selector - Installation Script
+# One-line install: curl -fsSL https://raw.githubusercontent.com/henkisdabro/Claude-Code-MCP-Server-Selector/main/install.sh | bash
 
 set -euo pipefail
 
@@ -9,7 +9,7 @@ set -euo pipefail
 # CONSTANTS
 # ============================================================================
 
-readonly REPO_URL="https://github.com/henkisdabro/cc-mcp-launcher.git"
+readonly REPO_URL="https://github.com/henkisdabro/Claude-Code-MCP-Server-Selector.git"
 readonly INSTALL_DIR="$HOME/.config/mcp-selector"
 readonly BIN_DIR="$HOME/.local/bin"
 readonly SYMLINK_MCP="$BIN_DIR/mcp"
@@ -213,7 +213,7 @@ check_dependencies() {
 # ============================================================================
 
 install_mcp_selector() {
-    msg_header "MCP Server Selector - Installation"
+    msg_header "Claude Code MCP Server Selector - Installation"
     echo ""
 
     # Check dependencies
