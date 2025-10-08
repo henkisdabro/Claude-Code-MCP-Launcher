@@ -6,7 +6,7 @@
 
 A fast, beautiful TUI for managing MCP (Model Context Protocol) servers in Claude Code. Optimize your context window by enabling only the servers you need, when you need them.
 
-![MCP Server Selector Screenshot](mcp_tui_screenshot.png)
+![MCP Server Selector Screenshot](tui_screen_recording.gif)
 
 ## Why MCP Server Selector?
 
