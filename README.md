@@ -14,14 +14,21 @@ A fast, beautiful TUI for managing MCP (Model Context Protocol) servers in Claud
 
 **Every enabled MCP server bloats your Claude Code context window with tool descriptions, parameters, and usage notes—wasting precious tokens on tools you're not using.**
 
-When you have 20+ MCP servers enabled, Claude's context is filled with hundreds of tool definitions before you even start working. This means:
+**The Real Numbers:**
+- **Average MCP server:** 20-30 tools, consuming ~15,000-25,000 tokens each
+- **Each tool:** ~600-800 tokens on average (descriptions, parameters, examples, usage notes)
+- **Large servers** (google_workspace, alphavantage, mikrotik): 60-100+ tools consuming 50,000-85,000 tokens each
+- **10 enabled servers:** Easily 200,000-250,000 tokens consumed (100-125% of your entire context budget)
+- **Result:** Context budget exhausted before typing your first prompt
 
-- **Wasted tokens** on irrelevant tool descriptions
-- **Reduced effective context** for your actual code and conversations
-- **Slower responses** due to processing unnecessary tool information
-- **Higher costs** from inflated token usage
+This means:
 
-MCP Server Selector solves this with a simple workflow: exit Claude, run `claudemcp`, enable only the 2-3 servers you need for your next task, and launch Claude with a minimal, optimized context window. Toggle servers with a keypress, see changes in real-time, and launch with optimal settings—all in under a second.
+- **Massive token waste** - 200k+ tokens on tool definitions you're not using
+- **Context overflow** - Already at/over budget before your actual code and conversations
+- **Severe performance impact** - Processing hundreds of unused tools slows every response
+- **Dramatically higher costs** - Paying for 2-5x more tokens than necessary
+
+MCP Server Selector solves this: exit Claude, run `mcp`, enable only the 1-3 servers you need for your current task, and launch Claude with a minimal, optimized context window. Toggle servers with a keypress, see changes in real-time, and launch with optimal settings—all in under a second.
 
 ## Features
 
@@ -251,7 +258,22 @@ nix-env -iA nixpkgs.fzf nixpkgs.jq
 
 ### The Context Window Problem
 
-Every MCP server you enable adds tool definitions to Claude's context window. With 20 servers enabled, you might be using 5,000+ tokens just on tool descriptions before your first prompt. This tool lets you manage this overhead by enabling servers only when needed.
+**The problem is far worse than you might think.** Every MCP server you enable adds tool definitions to Claude's context window—and each tool consumes significant tokens.
+
+**The Math:**
+- **Each tool:** ~600-800 tokens on average (descriptions, parameters, examples, usage notes)
+- **Average server:** 20-30 tools = ~15,000-25,000 tokens per server
+- **Large servers:** 60-100+ tools = 50,000-85,000 tokens each
+- **10 enabled servers:** ~200,000-250,000 tokens (100-125% of your 200k context budget)
+
+**The Impact:**
+- Context budget exhausted or exceeded before your first prompt
+- Claude processes hundreds of tool definitions you're not using
+- Less space for your actual code, files, and conversation
+- Slower responses and higher costs from token overhead
+
+**The Solution:**
+This tool lets you enable servers only when needed. Disable unnecessary servers and reclaim 100k-200k+ tokens for your actual work. Enable only the 1-3 servers relevant to your current task.
 
 ### Configuration Architecture
 

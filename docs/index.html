@@ -14,6 +14,7 @@
     <meta property="og:url" content="https://henkisdabro.github.io/Claude-Code-MCP-Launcher/">
 
     <title>MCP Server Selector - Optimize Your Claude Context</title>
+    <link rel="stylesheet" href="themes.css">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -21,7 +22,9 @@
     <nav class="nav">
         <div class="container nav-container">
             <div class="nav-brand">
-                <span class="brand-icon">⚡</span>
+                <svg class="brand-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                </svg>
                 <span class="brand-text">MCP Server Selector</span>
             </div>
             <div class="nav-links">
@@ -46,20 +49,20 @@
                     Your Claude Context is Drowning in Unused Tools
                 </h1>
                 <p class="hero-subtitle">
-                    Every enabled MCP server bloats your context window with tool definitions, wasting precious tokens before you even start working.
+                    Every enabled MCP server bloats your context window with tool definitions. Just 10 servers can consume 200,000+ tokens—your entire context budget—before you even start working.
                 </p>
                 <div class="hero-stats">
                     <div class="stat">
-                        <span class="stat-value">20+ servers</span>
-                        <span class="stat-label">5,000+ wasted tokens</span>
+                        <span class="stat-value">10 servers</span>
+                        <span class="stat-label">200k+ tokens consumed</span>
                     </div>
                     <div class="stat">
-                        <span class="stat-value">Every session</span>
-                        <span class="stat-label">Reduced context capacity</span>
+                        <span class="stat-value">~700 tokens</span>
+                        <span class="stat-label">Per tool on average</span>
                     </div>
                     <div class="stat">
-                        <span class="stat-value">Every response</span>
-                        <span class="stat-label">Slower, more expensive</span>
+                        <span class="stat-value">Budget exhausted</span>
+                        <span class="stat-label">Before your first prompt</span>
                     </div>
                 </div>
                 <div class="hero-ctas">
@@ -75,27 +78,37 @@
         <div class="container">
             <h2 class="section-title">The Context Window Problem</h2>
             <p class="section-intro">
-                Every MCP server you enable adds hundreds of tokens to Claude's context before your first prompt. With 20 servers enabled, you're wasting thousands of tokens on tools you're not using.
+                Each MCP tool consumes ~600-800 tokens on average. An average server has 20-30 tools (~20,000 tokens). Large servers like google_workspace have 90+ tools consuming 60,000+ tokens. With just 10 servers enabled, you're easily consuming 200,000-250,000 tokens—exceeding your entire context budget before your first prompt.
             </p>
             <div class="problem-grid">
                 <div class="problem-card">
-                    <div class="problem-icon">📊</div>
-                    <h3>Wasted Tokens</h3>
-                    <p>Tool descriptions, parameters, and usage notes consume your token budget on irrelevant features.</p>
+                    <svg class="problem-icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="12" y1="20" x2="12" y2="10"></line>
+                        <line x1="18" y1="20" x2="18" y2="4"></line>
+                        <line x1="6" y1="20" x2="6" y2="16"></line>
+                    </svg>
+                    <h3>Massive Token Waste</h3>
+                    <p>Each tool: ~700 tokens. Average server: 20-30 tools = 20,000 tokens. 10 servers = 200k+ tokens consumed before you start.</p>
                 </div>
                 <div class="problem-card">
-                    <div class="problem-icon">🔻</div>
-                    <h3>Reduced Context</h3>
-                    <p>Less space for your actual code, conversations, and the work that matters.</p>
+                    <svg class="problem-icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                        <line x1="12" y1="9" x2="12" y2="13"></line>
+                        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                    </svg>
+                    <h3>Context Overflow</h3>
+                    <p>Budget exhausted or exceeded before your code. Large servers (60-100+ tools) can consume 50k-85k tokens each.</p>
                 </div>
                 <div class="problem-card">
-                    <div class="problem-icon">🐌</div>
-                    <h3>Slower & Costlier</h3>
-                    <p>Processing unnecessary tool information slows responses and inflates costs.</p>
+                    <svg class="problem-icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                    </svg>
+                    <h3>Severe Performance Impact</h3>
+                    <p>Processing hundreds of unused tool definitions slows every response and dramatically inflates costs.</p>
                 </div>
             </div>
             <div class="problem-example">
-                <p class="example-question">Debugging authentication? Do you really need 15 other tool definitions taking up space?</p>
+                <p class="example-question">Debugging authentication? You need 0 MCP servers. Yet with 10 enabled, Claude is burning 200k+ tokens on cryptocurrency APIs, router configs, and web scrapers.</p>
             </div>
         </div>
     </section>
@@ -105,25 +118,34 @@
         <div class="container">
             <h2 class="section-title">MCP Server Selector: Context Window Optimization</h2>
             <p class="section-intro">
-                A fast, beautiful TUI that lets you enable only the MCP servers you need, when you need them. Toggle servers with a keypress and launch Claude with an optimized context window—all in under a second.
+                A fast, beautiful TUI that lets you enable only the MCP servers you need, when you need them. Disable 10 servers → reclaim 200k+ tokens. Enable only the 1-3 servers for your current task. Toggle with a keypress and launch Claude with an optimized context window—all in under a second.
             </p>
             <div class="solution-value">
                 <div class="value-prop">
-                    <span class="value-icon">⚡</span>
+                    <svg class="value-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                    </svg>
                     <div>
                         <h3>Instant Control</h3>
                         <p>Sub-second launch. Toggle any server on/off with SPACE. Save and launch with ENTER.</p>
                     </div>
                 </div>
                 <div class="value-prop">
-                    <span class="value-icon">🎯</span>
+                    <svg class="value-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <circle cx="12" cy="12" r="6"></circle>
+                        <circle cx="12" cy="12" r="2"></circle>
+                    </svg>
                     <div>
                         <h3>Minimal Context</h3>
-                        <p>Enable only 2-3 servers per session. Keep Claude focused on your code, not unused tools.</p>
+                        <p>Enable only 1-3 servers per task. Reclaim 100k-200k+ tokens for your code, not unused tool definitions.</p>
                     </div>
                 </div>
                 <div class="value-prop">
-                    <span class="value-icon">🔒</span>
+                    <svg class="value-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                    </svg>
                     <div>
                         <h3>Safe by Design</h3>
                         <p>Atomic updates, automatic backups, explicit consent for changes. Never corrupt your config.</p>
@@ -150,32 +172,55 @@
             <h2 class="section-title">Features</h2>
             <div class="features-grid">
                 <div class="feature-card">
-                    <div class="feature-icon">🎯</div>
+                    <svg class="feature-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <circle cx="12" cy="12" r="6"></circle>
+                        <circle cx="12" cy="12" r="2"></circle>
+                    </svg>
                     <h3>Context Optimization</h3>
                     <p>Enable only the servers you need. Minimize token waste and maximize effective context for your work.</p>
                 </div>
                 <div class="feature-card">
-                    <div class="feature-icon">⚡</div>
+                    <svg class="feature-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                        <line x1="8" y1="21" x2="16" y2="21"></line>
+                        <line x1="12" y1="17" x2="12" y2="21"></line>
+                    </svg>
                     <h3>Interactive TUI</h3>
                     <p>Fast, intuitive interface powered by fzf. Navigate, filter, and toggle with keyboard shortcuts.</p>
                 </div>
                 <div class="feature-card">
-                    <div class="feature-icon">🔄</div>
+                    <svg class="feature-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="23 4 23 10 17 10"></polyline>
+                        <polyline points="1 20 1 14 7 14"></polyline>
+                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                    </svg>
                     <h3>Real-time Updates</h3>
                     <p>Toggle servers instantly with visual feedback. Preview window shows current vs pending state.</p>
                 </div>
                 <div class="feature-card">
-                    <div class="feature-icon">📁</div>
+                    <svg class="feature-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+                        <polyline points="13 2 13 9 20 9"></polyline>
+                    </svg>
                     <h3>Multi-Source Config</h3>
                     <p>Discovers and merges 7 configuration sources with smart scope precedence (local → project → user).</p>
                 </div>
                 <div class="feature-card">
-                    <div class="feature-icon">🔀</div>
+                    <svg class="feature-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="18" cy="18" r="3"></circle>
+                        <circle cx="6" cy="6" r="3"></circle>
+                        <path d="M13 6h3a2 2 0 0 1 2 2v7"></path>
+                        <line x1="6" y1="9" x2="6" y2="21"></line>
+                    </svg>
                     <h3>Smart Migration</h3>
                     <p>Automatically migrate global servers to project-level control with backup and rollback protection.</p>
                 </div>
                 <div class="feature-card">
-                    <div class="feature-icon">🔒</div>
+                    <svg class="feature-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                    </svg>
                     <h3>Safe by Design</h3>
                     <p>Atomic writes, automatic backups, JSON validation. Explicit consent before global changes.</p>
                 </div>
@@ -207,7 +252,7 @@
                     <div class="step-number">3</div>
                     <div class="step-content">
                         <h3>Enable What You Need</h3>
-                        <p>Press SPACE to toggle. Only enable 2-3 servers for your current task</p>
+                        <p>Press SPACE to toggle. Only enable 1-3 servers for your current task (most tasks need 0-1)</p>
                     </div>
                 </div>
                 <div class="workflow-step">
@@ -219,7 +264,7 @@
                 </div>
             </div>
             <div class="workflow-tip">
-                <strong>Pro tip:</strong> Working on web APIs? Enable <code>fetch</code>. Debugging timezones? Enable <code>time</code>. Keep it minimal for maximum efficiency.
+                <strong>Pro tip:</strong> Most tasks need 0-1 servers. Working on web APIs? Enable <code>fetch</code> (1 server, ~800 tokens). Debugging timezones? Enable <code>time</code> (1 server, ~600 tokens). Everything else? Disable all servers and reclaim 200k+ tokens.
             </div>
         </div>
     </section>
