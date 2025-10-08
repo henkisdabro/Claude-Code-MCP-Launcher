@@ -11,7 +11,7 @@ set -euo pipefail
 # ============================================================================
 
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly VERSION="2.0.0"
+readonly VERSION="2.1.0"
 
 # Color codes
 readonly COLOR_RESET='\033[0m'
@@ -198,12 +198,11 @@ get_scope_priority() {
     esac
 }
 
-# Parse settings file (extracts BOTH mcpServers definitions AND enable/disable arrays)
+# Parse settings file (extracts enable/disable arrays ONLY, not mcpServers definitions)
 # Args: $1 - file path, $2 - scope label (local/project/user)
 # Output: Lines in format "type:server:scope:file"
-# Types: def (server defined), enable (server enabled), disable (server disabled)
-# Example: def:fetch:user:~/.claude/settings.json
-#          enable:fetch:user:~/.claude/settings.json
+# Types: enable (server enabled), disable (server disabled)
+# Example: enable:fetch:user:~/.claude/settings.json
 parse_settings_file() {
     local file="$1"
     local scope="$2"
@@ -212,10 +211,6 @@ parse_settings_file() {
         return 0
     fi
 
-    # Extract server definitions from mcpServers object
-    local definitions
-    definitions=$(jq -r '.mcpServers | keys[]? // empty' "$file" 2>/dev/null | sort -u)
-
     # Extract enabled servers
     local enabled
     enabled=$(jq -r '.enabledMcpjsonServers[]? // empty' "$file" 2>/dev/null | sort -u)
@@ -223,13 +218,6 @@ parse_settings_file() {
     # Extract disabled servers
     local disabled
     disabled=$(jq -r '.disabledMcpjsonServers[]? // empty' "$file" 2>/dev/null | sort -u)
-
-    # Output server definitions
-    if [[ -n "$definitions" ]]; then
-        while IFS= read -r server; do
-            [[ -n "$server" ]] && echo "def:$server:$scope:$file"
-        done <<< "$definitions"
-    fi
 
     # Output enabled servers
     if [[ -n "$enabled" ]]; then
@@ -247,7 +235,7 @@ parse_settings_file() {
 }
 
 # Parse .mcp.json file (mcpServers object format only, no enable/disable arrays)
-# Args: $1 - file path, $2 - scope label (local/project/user)
+# Args: $1 - file path, $2 - scope label (project only, not used for ~/.claude.json)
 # Output: Lines in format "def:server:scope:file"
 # Example: def:coingecko:project:./.mcp.json
 parse_mcp_json_file() {
@@ -266,6 +254,66 @@ parse_mcp_json_file() {
         while IFS= read -r server; do
             [[ -n "$server" ]] && echo "def:$server:$scope:$file"
         done <<< "$servers"
+    fi
+}
+
+# Parse ~/.claude.json file (handles BOTH user and project-specific scopes)
+# Args: $1 - file path (~/.claude.json)
+# Output: Lines in format "type:server:scope:file"
+# Types: def (server defined), enable (server enabled), disable (server disabled)
+# Scopes: user (root .mcpServers), local (under .projects[cwd])
+# Example: def:fetch:user:~/.claude.json
+#          def:stripe:local:~/.claude.json
+#          enable:time:local:~/.claude.json
+parse_claude_json_file() {
+    local file="$1"
+
+    if [[ ! -f "$file" ]] || ! jq empty "$file" 2>/dev/null; then
+        return 0
+    fi
+
+    # Get current working directory for project matching
+    local cwd
+    cwd=$(pwd)
+
+    # Parse user-scope servers (root level .mcpServers)
+    local user_servers
+    user_servers=$(jq -r '.mcpServers | keys[]? // empty' "$file" 2>/dev/null | sort -u)
+
+    if [[ -n "$user_servers" ]]; then
+        while IFS= read -r server; do
+            [[ -n "$server" ]] && echo "def:$server:user:$file"
+        done <<< "$user_servers"
+    fi
+
+    # Parse local-scope servers (project-specific .projects[cwd].mcpServers)
+    local local_servers
+    local_servers=$(jq -r --arg cwd "$cwd" '.projects[$cwd].mcpServers | keys[]? // empty' "$file" 2>/dev/null | sort -u)
+
+    if [[ -n "$local_servers" ]]; then
+        while IFS= read -r server; do
+            [[ -n "$server" ]] && echo "def:$server:local:$file"
+        done <<< "$local_servers"
+    fi
+
+    # Parse local-scope enabled servers (.projects[cwd].enabledMcpjsonServers)
+    local enabled
+    enabled=$(jq -r --arg cwd "$cwd" '.projects[$cwd].enabledMcpjsonServers[]? // empty' "$file" 2>/dev/null | sort -u)
+
+    if [[ -n "$enabled" ]]; then
+        while IFS= read -r server; do
+            [[ -n "$server" ]] && echo "enable:$server:local:$file"
+        done <<< "$enabled"
+    fi
+
+    # Parse local-scope disabled servers (.projects[cwd].disabledMcpjsonServers)
+    local disabled
+    disabled=$(jq -r --arg cwd "$cwd" '.projects[$cwd].disabledMcpjsonServers[]? // empty' "$file" 2>/dev/null | sort -u)
+
+    if [[ -n "$disabled" ]]; then
+        while IFS= read -r server; do
+            [[ -n "$server" ]] && echo "disable:$server:local:$file"
+        done <<< "$disabled"
     fi
 }
 
@@ -290,8 +338,7 @@ discover_settings_file() {
     # No local config, check if global exists
     if [[ -f "$HOME/.claude/settings.json" ]] || \
        [[ -f "$HOME/.claude/settings.local.json" ]] || \
-       [[ -f "$HOME/.claude.json" ]] || \
-       [[ -f "$HOME/.mcp.json" ]]; then
+       [[ -f "$HOME/.claude.json" ]]; then
         # Global config exists, trigger new project flow
         handle_new_project_prompt
         return $?
@@ -369,21 +416,27 @@ handle_new_project_prompt() {
 # STATE MANAGEMENT
 # ============================================================================
 
-# Discover and parse all 7 configuration sources
+# Discover and parse all configuration sources
+# mcpServers definitions can ONLY exist in ~/.claude.json (user & local) and ./.mcp.json (project)
+# Enable/disable arrays can exist in ~/.claude.json projects AND any settings file
 # Output: Lines in format "state:server:scope:file" or "defined:server:scope:file"
 discover_and_parse_all_sources() {
     local temp_raw
     temp_raw=$(mktemp)
 
-    # Define all 7 sources in reverse precedence order (lowest to highest)
+    # Parse ~/.claude.json (handles both user-scope root AND local-scope project entries)
+    # Also extracts enable/disable arrays from .projects[cwd]
+    parse_claude_json_file "$HOME/.claude.json" >> "$temp_raw"
+
+    # Parse ./.mcp.json (project-scope mcpServers only)
+    parse_mcp_json_file "./.mcp.json" "project" >> "$temp_raw"
+
+    # Parse enable/disable arrays from all settings files (reverse precedence order)
     # User scope (lowest priority)
-    parse_mcp_json_file "$HOME/.mcp.json" "user" >> "$temp_raw"
-    parse_settings_file "$HOME/.claude.json" "user" >> "$temp_raw"
     parse_settings_file "$HOME/.claude/settings.json" "user" >> "$temp_raw"
     parse_settings_file "$HOME/.claude/settings.local.json" "user" >> "$temp_raw"
 
     # Project scope
-    parse_mcp_json_file "./.mcp.json" "project" >> "$temp_raw"
     parse_settings_file "./.claude/settings.json" "project" >> "$temp_raw"
 
     # Local scope (highest priority)
@@ -486,8 +539,9 @@ load_servers() {
         def_scope=$(echo "$def_value" | cut -d: -f2)
         def_file=$(echo "$def_value" | cut -d: -f3-)
 
-        # Get state (default to "off" if not mentioned in any enable/disable array)
-        local state="off"
+        # Get state (default to "on" if not mentioned in any enable/disable array)
+        # Servers defined in mcpServers are enabled by default unless explicitly disabled
+        local state="on"
         if [[ -n "${server_states[$server]:-}" ]]; then
             local state_value="${server_states[$server]}"
             state=$(echo "$state_value" | cut -d: -f2)
@@ -878,12 +932,13 @@ launch_fzf_tui() {
     export -f enable_all_servers disable_all_servers
     export -f add_server_flow remove_server_flow msg_error msg_warning msg_success
     export -f discover_and_parse_all_sources get_scope_priority generate_preview
-    export -f parse_settings_file parse_mcp_json_file detect_file_format
+    export -f parse_settings_file parse_mcp_json_file parse_claude_json_file detect_file_format
 
     clear
     msg_header "MCP Server Selector v${VERSION}"
     echo -e "${COLOR_YELLOW}Write Target:${COLOR_RESET} ./.claude/settings.local.json"
-    echo -e "${COLOR_YELLOW}Reading From:${COLOR_RESET} 7 config sources (local/project/user)"
+    echo -e "${COLOR_YELLOW}Definitions:${COLOR_RESET} ~/.claude.json (user & local), ./.mcp.json (project)"
+    echo -e "${COLOR_YELLOW}Enable/Disable:${COLOR_RESET} ~/.claude.json projects + all settings files"
     echo ""
 
     # Count servers by scope
