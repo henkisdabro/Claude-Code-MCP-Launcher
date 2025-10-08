@@ -236,8 +236,8 @@ parse_settings_file() {
 
 # Parse .mcp.json file (mcpServers object format only, no enable/disable arrays)
 # Args: $1 - file path, $2 - scope label (project only, not used for ~/.claude.json)
-# Output: Lines in format "def:server:scope:file"
-# Example: def:coingecko:project:./.mcp.json
+# Output: Lines in format "def:server:scope:file:source_type"
+# Example: def:coingecko:project:./.mcp.json:mcpjson
 parse_mcp_json_file() {
     local file="$1"
     local scope="$2"
@@ -252,18 +252,19 @@ parse_mcp_json_file() {
 
     if [[ -n "$servers" ]]; then
         while IFS= read -r server; do
-            [[ -n "$server" ]] && echo "def:$server:$scope:$file"
+            [[ -n "$server" ]] && echo "def:$server:$scope:$file:mcpjson"
         done <<< "$servers"
     fi
 }
 
 # Parse ~/.claude.json file (handles BOTH user and project-specific scopes)
 # Args: $1 - file path (~/.claude.json)
-# Output: Lines in format "type:server:scope:file"
+# Output: Lines in format "type:server:scope:file:source_type"
 # Types: def (server defined), enable (server enabled), disable (server disabled)
 # Scopes: user (root .mcpServers), local (under .projects[cwd])
-# Example: def:fetch:user:~/.claude.json
-#          def:stripe:local:~/.claude.json
+# Source types: direct-global (root), direct-local (projects)
+# Example: def:fetch:user:~/.claude.json:direct-global
+#          def:stripe:local:~/.claude.json:direct-local
 #          enable:time:local:~/.claude.json
 parse_claude_json_file() {
     local file="$1"
@@ -276,27 +277,28 @@ parse_claude_json_file() {
     local cwd
     cwd=$(pwd)
 
-    # Parse user-scope servers (root level .mcpServers)
+    # Parse user-scope servers (root level .mcpServers) - DIRECT-GLOBAL (always enabled)
     local user_servers
     user_servers=$(jq -r '.mcpServers | keys[]? // empty' "$file" 2>/dev/null | sort -u)
 
     if [[ -n "$user_servers" ]]; then
         while IFS= read -r server; do
-            [[ -n "$server" ]] && echo "def:$server:user:$file"
+            [[ -n "$server" ]] && echo "def:$server:user:$file:direct-global"
         done <<< "$user_servers"
     fi
 
-    # Parse local-scope servers (project-specific .projects[cwd].mcpServers)
+    # Parse local-scope servers (project-specific .projects[cwd].mcpServers) - DIRECT-LOCAL (always enabled)
     local local_servers
     local_servers=$(jq -r --arg cwd "$cwd" '.projects[$cwd].mcpServers | keys[]? // empty' "$file" 2>/dev/null | sort -u)
 
     if [[ -n "$local_servers" ]]; then
         while IFS= read -r server; do
-            [[ -n "$server" ]] && echo "def:$server:local:$file"
+            [[ -n "$server" ]] && echo "def:$server:local:$file:direct-local"
         done <<< "$local_servers"
     fi
 
     # Parse local-scope enabled servers (.projects[cwd].enabledMcpjsonServers)
+    # NOTE: These are removed by Claude Code on launch, but we parse them for completeness
     local enabled
     enabled=$(jq -r --arg cwd "$cwd" '.projects[$cwd].enabledMcpjsonServers[]? // empty' "$file" 2>/dev/null | sort -u)
 
@@ -307,6 +309,7 @@ parse_claude_json_file() {
     fi
 
     # Parse local-scope disabled servers (.projects[cwd].disabledMcpjsonServers)
+    # NOTE: These are removed by Claude Code on launch, but we parse them for completeness
     local disabled
     disabled=$(jq -r --arg cwd "$cwd" '.projects[$cwd].disabledMcpjsonServers[]? // empty' "$file" 2>/dev/null | sort -u)
 
@@ -417,18 +420,24 @@ handle_new_project_prompt() {
 # ============================================================================
 
 # Discover and parse all configuration sources
-# mcpServers definitions can ONLY exist in ~/.claude.json (user & local) and ./.mcp.json (project)
-# Enable/disable arrays can exist in ~/.claude.json projects AND any settings file
-# Output: Lines in format "state:server:scope:file" or "defined:server:scope:file"
+# mcpServers definitions can exist in:
+#   - ~/.claude.json (user-scope root & project-scope .projects[cwd]) - DIRECT (always enabled)
+#   - ~/.mcp.json (user-scope) - MCPJSON (controllable)
+#   - ./.mcp.json (project-scope) - MCPJSON (controllable)
+# Enable/disable arrays ONLY work for MCPJSON servers (from .mcp.json files)
+# Output: Lines in format "type:server:scope:file:source_type"
 discover_and_parse_all_sources() {
     local temp_raw
     temp_raw=$(mktemp)
 
     # Parse ~/.claude.json (handles both user-scope root AND local-scope project entries)
-    # Also extracts enable/disable arrays from .projects[cwd]
+    # Also extracts enable/disable arrays from .projects[cwd] (though Claude Code removes them)
     parse_claude_json_file "$HOME/.claude.json" >> "$temp_raw"
 
-    # Parse ./.mcp.json (project-scope mcpServers only)
+    # Parse ~/.mcp.json (user-scope mcpServers - MCPJSON type, controllable)
+    parse_mcp_json_file "$HOME/.mcp.json" "user" >> "$temp_raw"
+
+    # Parse ./.mcp.json (project-scope mcpServers - MCPJSON type, controllable)
     parse_mcp_json_file "./.mcp.json" "project" >> "$temp_raw"
 
     # Parse enable/disable arrays from all settings files (reverse precedence order)
@@ -448,9 +457,9 @@ discover_and_parse_all_sources() {
 
 # Load servers from all sources with DUAL precedence resolution
 # Separates server definitions from enable/disable state
-# State format: "state:server:def_scope:def_file" (one per line)
-# Example: "on:fetch:project:./.claude/settings.json"
-# Where state=on/off, def_scope/def_file=where server is DEFINED
+# State format: "state:server:def_scope:def_file:source_type" (one per line)
+# Example: "on:fetch:project:./.mcp.json:mcpjson"
+# Where state=on/off, def_scope/def_file=where server is DEFINED, source_type=mcpjson/direct-global/direct-local
 load_servers() {
     local raw_data
     raw_data=$(discover_and_parse_all_sources)
@@ -466,7 +475,7 @@ load_servers() {
 
     # Build two separate maps for dual precedence resolution
     # Map 1: Server definitions (where server is configured)
-    # Key: server_name, Value: priority:scope:file
+    # Key: server_name, Value: priority:scope:file:source_type
     declare -A server_definitions
 
     # Map 2: Enable/disable state (whether server is active)
@@ -474,7 +483,7 @@ load_servers() {
     declare -A server_states
 
     # Parse raw data and populate both maps
-    while IFS=: read -r type server scope file; do
+    while IFS=: read -r type server scope file source_type; do
         [[ -z "$server" ]] && continue
 
         local priority
@@ -482,7 +491,7 @@ load_servers() {
 
         if [[ "$type" == "def" ]]; then
             # This is a server definition
-            local new_value="$priority:$scope:$file"
+            local new_value="$priority:$scope:$file:$source_type"
 
             if [[ -n "${server_definitions[$server]:-}" ]]; then
                 local existing_priority
@@ -531,61 +540,364 @@ load_servers() {
     # Write to state file
     > "$STATE_FILE"  # Truncate
 
-    # Merge: For each defined server, attach its state
+    # Merge: For each defined server, attach its state and source type
     for server in "${!server_definitions[@]}"; do
         local def_value="${server_definitions[$server]}"
-        # Extract scope:file from priority:scope:file
-        local def_scope def_file
+        # Extract scope:file:source_type from priority:scope:file:source_type
+        local def_scope def_file source_type
         def_scope=$(echo "$def_value" | cut -d: -f2)
-        def_file=$(echo "$def_value" | cut -d: -f3-)
+        def_file=$(echo "$def_value" | cut -d: -f3)
+        source_type=$(echo "$def_value" | cut -d: -f4)
 
         # Get state (default to "on" if not mentioned in any enable/disable array)
-        # Servers defined in mcpServers are enabled by default unless explicitly disabled
+        # MCPJSON servers are enabled by default unless explicitly disabled
+        # DIRECT servers are ALWAYS enabled (but we track state for migration purposes)
         local state="on"
         if [[ -n "${server_states[$server]:-}" ]]; then
             local state_value="${server_states[$server]}"
             state=$(echo "$state_value" | cut -d: -f2)
         fi
 
-        echo "$state:$server:$def_scope:$def_file" >> "$STATE_FILE"
+        echo "$state:$server:$def_scope:$def_file:$source_type" >> "$STATE_FILE"
     done
 
     # Sort state file by server name
     sort -t: -k2 "$STATE_FILE" -o "$STATE_FILE"
 }
 
+# ============================================================================
+# MIGRATION HELPER FUNCTIONS
+# ============================================================================
+
+# Check if server has already been migrated to ./.mcp.json
+# Args: $1 - server name
+# Returns: 0 if migrated, 1 if not
+is_server_migrated() {
+    local server="$1"
+    local migrations_file="./.claude/.mcp_migrations"
+
+    if [[ -f "$migrations_file" ]]; then
+        grep -q "^$server:" "$migrations_file" 2>/dev/null
+        return $?
+    fi
+
+    return 1
+}
+
+# Mark server as migrated
+# Args: $1 - server name
+mark_server_migrated() {
+    local server="$1"
+    local migrations_file="./.claude/.mcp_migrations"
+
+    mkdir -p "./.claude"
+    echo "$server:$(date +%s)" >> "$migrations_file"
+}
+
+# Get server source type from state file
+# Args: $1 - server name
+# Returns: source type (mcpjson, direct-global, direct-local) or empty
+get_server_source_type() {
+    local server="$1"
+
+    while IFS=: read -r state srv scope file source_type; do
+        if [[ "$srv" == "$server" ]]; then
+            echo "$source_type"
+            return 0
+        fi
+    done < "$STATE_FILE"
+
+    return 1
+}
+
+# Get server definition file and scope from state file
+# Args: $1 - server name
+# Returns: "scope:file" or empty
+get_server_definition_location() {
+    local server="$1"
+
+    while IFS=: read -r state srv scope file source_type; do
+        if [[ "$srv" == "$server" ]]; then
+            echo "$scope:$file"
+            return 0
+        fi
+    done < "$STATE_FILE"
+
+    return 1
+}
+
+# Extract server definition from source file
+# Args: $1 - server name, $2 - source file, $3 - source type
+# Returns: JSON definition of server
+extract_server_definition() {
+    local server="$1"
+    local source_file="$2"
+    local source_type="$3"
+    local cwd=$(pwd)
+
+    if [[ "$source_type" == "direct-global" ]]; then
+        # From ~/.claude.json root .mcpServers
+        jq -r --arg srv "$server" '.mcpServers[$srv]' "$source_file"
+    elif [[ "$source_type" == "direct-local" ]]; then
+        # From ~/.claude.json .projects[cwd].mcpServers
+        jq -r --arg cwd "$cwd" --arg srv "$server" '.projects[$cwd].mcpServers[$srv]' "$source_file"
+    else
+        # From .mcp.json file
+        jq -r --arg srv "$server" '.mcpServers[$srv]' "$source_file"
+    fi
+}
+
+# Migrate server from ~/.claude.json to ./.mcp.json
+# Args: $1 - server name
+# Returns: 0 on success, 1 on failure
+migrate_server_to_project_mcpjson() {
+    local server="$1"
+
+    # Get server location and source type
+    local location source_type def_scope def_file
+    location=$(get_server_definition_location "$server")
+    if [[ -z "$location" ]]; then
+        msg_error "Cannot find server '$server' in state"
+        return 1
+    fi
+
+    def_scope=$(echo "$location" | cut -d: -f1)
+    def_file=$(echo "$location" | cut -d: -f2-)
+    source_type=$(get_server_source_type "$server")
+
+    # Only migrate if it's a direct server
+    if [[ "$source_type" != "direct-global" ]] && [[ "$source_type" != "direct-local" ]]; then
+        msg_error "Server '$server' is not a direct server (type: $source_type)"
+        return 1
+    fi
+
+    msg_info "Migrating '$server' to ./.mcp.json for project-level control..."
+    echo ""
+
+    # Create backup of ~/.claude.json
+    local backup_file="$HOME/.claude.json.backup.$(date +%Y%m%d_%H%M%S)"
+    if ! cp "$def_file" "$backup_file" 2>/dev/null; then
+        msg_error "Failed to create backup of $def_file"
+        return 1
+    fi
+    msg_info "Backup created: $backup_file"
+
+    # Extract server definition
+    local definition
+    definition=$(extract_server_definition "$server" "$def_file" "$source_type")
+    if [[ -z "$definition" ]] || [[ "$definition" == "null" ]]; then
+        msg_error "Failed to extract server definition"
+        rm "$backup_file"
+        return 1
+    fi
+
+    # Create ./.mcp.json if it doesn't exist
+    if [[ ! -f "./.mcp.json" ]]; then
+        echo '{"mcpServers":{}}' > "./.mcp.json"
+        msg_info "Created ./.mcp.json"
+    fi
+
+    # Add to ./.mcp.json (atomic operation)
+    local temp_dest=$(mktemp)
+    if ! jq --arg srv "$server" --argjson def "$definition" \
+        '.mcpServers[$srv] = $def' "./.mcp.json" > "$temp_dest" 2>/dev/null; then
+        msg_error "Failed to add server to ./.mcp.json"
+        rm "$temp_dest" "$backup_file"
+        return 1
+    fi
+    mv "$temp_dest" "./.mcp.json"
+    msg_success "Added to ./.mcp.json"
+
+    # Remove from ~/.claude.json (atomic operation)
+    local temp_src=$(mktemp)
+    local cwd=$(pwd)
+
+    if [[ "$source_type" == "direct-global" ]]; then
+        # Remove from root .mcpServers
+        if ! jq --arg srv "$server" 'del(.mcpServers[$srv])' "$def_file" > "$temp_src" 2>/dev/null; then
+            msg_error "Failed to remove server from $def_file"
+            rm "$temp_src" "$backup_file"
+            return 1
+        fi
+    elif [[ "$source_type" == "direct-local" ]]; then
+        # Remove from .projects[cwd].mcpServers
+        if ! jq --arg cwd "$cwd" --arg srv "$server" \
+            'del(.projects[$cwd].mcpServers[$srv])' "$def_file" > "$temp_src" 2>/dev/null; then
+            msg_error "Failed to remove server from $def_file"
+            rm "$temp_src" "$backup_file"
+            return 1
+        fi
+    fi
+
+    # Validate both JSON files
+    if ! jq empty "$temp_src" 2>/dev/null || ! jq empty "./.mcp.json" 2>/dev/null; then
+        msg_error "JSON validation failed, rolling back"
+        mv "$backup_file" "$def_file"
+        rm "$temp_src"
+        return 1
+    fi
+
+    mv "$temp_src" "$def_file"
+    msg_success "Removed from $def_file"
+
+    # Mark as migrated
+    mark_server_migrated "$server"
+
+    echo ""
+    msg_success "Migration complete!"
+    msg_info "Server '$server' can now be controlled via project settings"
+    echo ""
+
+    return 0
+}
+
+# Prompt user for migration with interactive options
+# Args: $1 - server name, $2 - source type, $3 - source file
+# Returns: 0 if user wants to migrate, 1 if not
+prompt_for_migration() {
+    local server="$1"
+    local source_type="$2"
+    local source_file="$3"
+
+    # Redirect to tty to get input from user
+    exec < /dev/tty
+
+    clear
+    echo ""
+    echo -e "${COLOR_YELLOW}═══════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${COLOR_WHITE}  Migration Required: ${COLOR_CYAN}$server${COLOR_RESET}"
+    echo -e "${COLOR_YELLOW}═══════════════════════════════════════════════════${COLOR_RESET}"
+    echo ""
+    echo "This server is defined in:"
+    echo -e "  ${COLOR_CYAN}$source_file${COLOR_RESET}"
+    echo ""
+    echo "Servers in this location are ${COLOR_RED}ALWAYS ENABLED${COLOR_RESET}."
+    echo ""
+    echo "To disable it, this tool must:"
+    echo -e "  ${COLOR_GREEN}1.${COLOR_RESET} MOVE definition → ${COLOR_CYAN}./.mcp.json${COLOR_RESET} (project)"
+    echo -e "  ${COLOR_GREEN}2.${COLOR_RESET} REMOVE from → ${COLOR_CYAN}$source_file${COLOR_RESET}"
+    echo -e "  ${COLOR_GREEN}3.${COLOR_RESET} Disable via → ${COLOR_CYAN}./.claude/settings.local.json${COLOR_RESET}"
+    echo ""
+    echo -e "${COLOR_YELLOW}⚠ This MODIFIES your global config!${COLOR_RESET}"
+    echo -e "  (A backup will be created first)"
+    echo ""
+    echo "Options:"
+    echo -e "  ${COLOR_GREEN}[y]${COLOR_RESET} Migrate and disable (recommended)"
+    echo -e "  ${COLOR_BLUE}[v]${COLOR_RESET} View full server definition first"
+    echo -e "  ${COLOR_RED}[n]${COLOR_RESET} Keep enabled globally (cancel)"
+    echo ""
+
+    while true; do
+        read -rp "Your choice [y/v/n]: " choice
+        case "$choice" in
+            y|Y)
+                return 0
+                ;;
+            v|V)
+                # Show definition
+                echo ""
+                echo -e "${COLOR_CYAN}Server Definition:${COLOR_RESET}"
+                echo ""
+                extract_server_definition "$server" "$source_file" "$source_type" | jq .
+                echo ""
+                read -rp "Migrate this to ./.mcp.json? [y/n]: " confirm
+                if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                    return 0
+                else
+                    return 1
+                fi
+                ;;
+            n|N)
+                msg_warning "Migration cancelled - server will remain enabled"
+                sleep 1
+                return 1
+                ;;
+            *)
+                echo -e "${COLOR_RED}Invalid choice. Please enter y, v, or n${COLOR_RESET}"
+                ;;
+        esac
+    done
+}
+
 # Toggle server state in state file
 # Args: $1 - server name (may have prefix like "[ON ] server-name (scope)")
+# Handles migration for direct servers
 toggle_server() {
     local raw_input="$1"
 
     # Strip ANSI codes, prefixes, and scope suffix to get clean server name
     local server
-    server=$(echo "$raw_input" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^\[ON \] *//' | sed 's/^\[OFF\] *//' | sed 's/^     *//' | sed 's/ *(.*)$//')
+    server=$(echo "$raw_input" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^\[ON \] *//' | sed 's/^\[OFF\] *//' | sed 's/^\[⚠ \] *//' | sed 's/^     *//' | sed 's/ *(.*)$//')
 
-    # Read state file, toggle the server, write back (preserve scope and file)
+    # Get source type and current state
+    local source_type current_state
+    source_type=$(get_server_source_type "$server")
+
+    while IFS=: read -r state srv scope file stype; do
+        if [[ "$srv" == "$server" ]]; then
+            current_state="$state"
+            break
+        fi
+    done < "$STATE_FILE"
+
+    # Check if this is a direct server and user is trying to disable it
+    if [[ "$source_type" == "direct-global" ]] || [[ "$source_type" == "direct-local" ]]; then
+        # Check if server is currently enabled and user wants to disable
+        if [[ "$current_state" == "on" ]]; then
+            # Check if already migrated
+            if ! is_server_migrated "$server"; then
+                # Get definition location
+                local location def_file
+                location=$(get_server_definition_location "$server")
+                def_file=$(echo "$location" | cut -d: -f2-)
+
+                # Prompt for migration
+                if prompt_for_migration "$server" "$source_type" "$def_file"; then
+                    # Perform migration
+                    if migrate_server_to_project_mcpjson "$server"; then
+                        # Reload servers after migration
+                        load_servers
+                        msg_info "Reloaded server list - server is now controllable"
+                        sleep 1
+                        return 0
+                    else
+                        msg_error "Migration failed"
+                        sleep 2
+                        return 1
+                    fi
+                else
+                    # User cancelled migration
+                    return 0
+                fi
+            fi
+            # If already migrated, fall through to normal toggle
+        fi
+    fi
+
+    # Normal toggle (for mcpjson servers or re-enabling direct servers after migration)
     local temp_state
     temp_state=$(mktemp)
 
-    while IFS=: read -r state srv scope file; do
+    while IFS=: read -r state srv scope file source_type; do
         if [[ "$srv" == "$server" ]]; then
-            # Toggle state, preserve scope and file
+            # Toggle state, preserve scope, file, and source type
             if [[ "$state" == "on" ]]; then
-                echo "off:$srv:$scope:$file" >> "$temp_state"
+                echo "off:$srv:$scope:$file:$source_type" >> "$temp_state"
             else
-                echo "on:$srv:$scope:$file" >> "$temp_state"
+                echo "on:$srv:$scope:$file:$source_type" >> "$temp_state"
             fi
         else
             # Keep unchanged
-            echo "$state:$srv:$scope:$file" >> "$temp_state"
+            echo "$state:$srv:$scope:$file:$source_type" >> "$temp_state"
         fi
     done < "$STATE_FILE"
 
     mv "$temp_state" "$STATE_FILE"
 }
 
-# Add new server to state file (disabled by default, local scope)
+# Add new server to state file (disabled by default, local scope, mcpjson type)
 # Args: $1 - server name
+# Note: Added servers are placeholders - user must define them in .mcp.json manually
 add_server() {
     local server="$1"
 
@@ -601,8 +913,9 @@ add_server() {
         return 1
     fi
 
-    # Add to state file (disabled, local scope, project-local settings file)
-    echo "off:$server:local:./.claude/settings.local.json" >> "$STATE_FILE"
+    # Add to state file (disabled, project scope, .mcp.json, mcpjson type)
+    # Note: This assumes user will define the server in ./.mcp.json
+    echo "off:$server:project:./.mcp.json:mcpjson" >> "$STATE_FILE"
     sort -t: -k2 "$STATE_FILE" -o "$STATE_FILE"
 }
 
@@ -613,40 +926,40 @@ remove_server() {
 
     # Strip ANSI codes, prefixes, and scope suffix
     local server
-    server=$(echo "$raw_input" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^\[ON \] *//' | sed 's/^\[OFF\] *//' | sed 's/^     *//' | sed 's/ *(.*)$//')
+    server=$(echo "$raw_input" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^\[ON \] *//' | sed 's/^\[OFF\] *//' | sed 's/^\[⚠ \] *//' | sed 's/^     *//' | sed 's/ *(.*)$//')
 
     # Remove from state file (match server name in column 2)
     local temp_state
     temp_state=$(mktemp)
 
-    while IFS=: read -r state srv scope file; do
+    while IFS=: read -r state srv scope file source_type; do
         if [[ "$srv" != "$server" ]]; then
-            echo "$state:$srv:$scope:$file" >> "$temp_state"
+            echo "$state:$srv:$scope:$file:$source_type" >> "$temp_state"
         fi
     done < "$STATE_FILE"
 
     mv "$temp_state" "$STATE_FILE"
 }
 
-# Enable all servers in state file (preserve scope and file metadata)
+# Enable all servers in state file (preserve scope, file, and source type metadata)
 enable_all_servers() {
     local temp_state
     temp_state=$(mktemp)
 
-    while IFS=: read -r state srv scope file; do
-        echo "on:$srv:$scope:$file" >> "$temp_state"
+    while IFS=: read -r state srv scope file source_type; do
+        echo "on:$srv:$scope:$file:$source_type" >> "$temp_state"
     done < "$STATE_FILE"
 
     mv "$temp_state" "$STATE_FILE"
 }
 
-# Disable all servers in state file (preserve scope and file metadata)
+# Disable all servers in state file (preserve scope, file, and source type metadata)
 disable_all_servers() {
     local temp_state
     temp_state=$(mktemp)
 
-    while IFS=: read -r state srv scope file; do
-        echo "off:$srv:$scope:$file" >> "$temp_state"
+    while IFS=: read -r state srv scope file source_type; do
+        echo "off:$srv:$scope:$file:$source_type" >> "$temp_state"
     done < "$STATE_FILE"
 
     mv "$temp_state" "$STATE_FILE"
@@ -667,7 +980,7 @@ save_state_to_settings() {
     local enabled_servers=()
     local disabled_servers=()
 
-    while IFS=: read -r state server scope file; do
+    while IFS=: read -r state server scope file source_type; do
         [[ -z "$server" ]] && continue
 
         if [[ "$state" == "on" ]]; then
@@ -716,7 +1029,7 @@ save_state_to_settings() {
 # ============================================================================
 
 # Generate fzf list from state file
-# Output format: "[ON ] server-name (scope)" or "[OFF] server-name (scope)"
+# Output format: "[ON ] server-name (scope, type)" or "[⚠ ] server-name (scope, always-on)"
 generate_fzf_list() {
     if [[ ! -f "$STATE_FILE" ]] || [[ ! -s "$STATE_FILE" ]]; then
         echo ""
@@ -724,14 +1037,26 @@ generate_fzf_list() {
     fi
 
     local dim='\033[2m'  # Dim/grey color for scope labels
+    local warning_color='\033[0;33m'  # Yellow for warning
 
-    while IFS=: read -r state server scope file; do
+    while IFS=: read -r state server scope file source_type; do
         [[ -z "$server" ]] && continue
 
-        if [[ "$state" == "on" ]]; then
-            echo -e "${COLOR_GREEN}[ON ]${COLOR_RESET} $server ${dim}($scope)${COLOR_RESET}"
+        # Check if server is a direct server (always enabled) and not yet migrated
+        local is_direct=false
+        if [[ "$source_type" == "direct-global" ]] || [[ "$source_type" == "direct-local" ]]; then
+            if ! is_server_migrated "$server"; then
+                is_direct=true
+            fi
+        fi
+
+        if [[ "$is_direct" == "true" ]]; then
+            # Direct servers show warning indicator
+            echo -e "${warning_color}[⚠ ]${COLOR_RESET} $server ${dim}($scope, always-on)${COLOR_RESET}"
+        elif [[ "$state" == "on" ]]; then
+            echo -e "${COLOR_GREEN}[ON ]${COLOR_RESET} $server ${dim}($scope, $source_type)${COLOR_RESET}"
         elif [[ "$state" == "off" ]]; then
-            echo -e "${COLOR_RED}[OFF]${COLOR_RESET} $server ${dim}($scope)${COLOR_RESET}"
+            echo -e "${COLOR_RED}[OFF]${COLOR_RESET} $server ${dim}($scope, $source_type)${COLOR_RESET}"
         fi
     done < "$STATE_FILE"
 }
@@ -743,23 +1068,25 @@ generate_preview() {
 
     # Strip ANSI codes, prefixes, and scope suffix
     local server
-    server=$(echo "$raw_input" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^\[ON \] *//' | sed 's/^\[OFF\] *//' | sed 's/^     *//' | sed 's/ *(.*)$//')
+    server=$(echo "$raw_input" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^\[ON \] *//' | sed 's/^\[OFF\] *//' | sed 's/^\[⚠ \] *//' | sed 's/^     *//' | sed 's/ *(.*)$//')
 
     if [[ -z "$server" ]]; then
         echo "No server selected"
         return
     fi
 
-    # Find effective state and definition source from state file
+    # Find effective state, definition source, and source type from state file
     local current_state=""
     local def_scope=""
     local def_file=""
+    local source_type=""
 
-    while IFS=: read -r state srv scope file; do
+    while IFS=: read -r state srv scope file stype; do
         if [[ "$srv" == "$server" ]]; then
             current_state="$state"
             def_scope="$scope"
             def_file="$file"
+            source_type="$stype"
             break
         fi
     done < "$STATE_FILE"
@@ -790,74 +1117,83 @@ generate_preview() {
         fi
     done <<< "$all_sources"
 
-    # Display header
-    echo -e "${COLOR_CYAN}Server:${COLOR_RESET} ${COLOR_WHITE}$server${COLOR_RESET}"
+    # Header with separator
+    echo "────────────────────────────────────────"
+    echo -e " ${COLOR_WHITE}$server${COLOR_RESET}"
+    echo "────────────────────────────────────────"
     echo ""
 
-    # Show definition source
-    echo -e "${COLOR_CYAN}Defined In:${COLOR_RESET} $def_file ($def_scope)"
+    # Source type
+    echo -e "${COLOR_CYAN}Source Type${COLOR_RESET}"
+    case "$source_type" in
+        mcpjson)
+            echo -e "  ${COLOR_GREEN}MCP.json${COLOR_RESET} (controllable)"
+            ;;
+        direct-global)
+            echo -e "  ${COLOR_YELLOW}Direct (global)${COLOR_RESET} - always enabled"
+            ;;
+        direct-local)
+            echo -e "  ${COLOR_YELLOW}Direct (local)${COLOR_RESET} - always enabled"
+            ;;
+    esac
+    echo ""
 
-    # Show state source if different from definition source
-    if [[ -n "$state_file" ]] && [[ "$state_file" != "$def_file" ]]; then
-        local state_type
-        if [[ "$current_state" == "on" ]]; then
-            state_type="Enabled"
+    # Definition source
+    echo -e "${COLOR_CYAN}Definition${COLOR_RESET}"
+    echo -e "  Scope: $def_scope"
+    echo -e "  File:  $def_file"
+    echo ""
+
+    # Status
+    echo -e "${COLOR_CYAN}Status${COLOR_RESET}"
+
+    # Check if this is a direct server that hasn't been migrated
+    if [[ "$source_type" == "direct-global" ]] || [[ "$source_type" == "direct-local" ]]; then
+        if ! is_server_migrated "$server"; then
+            # Direct server - always enabled
+            echo -e "  ${COLOR_YELLOW}⚠  Always Enabled${COLOR_RESET}"
+            echo ""
+            echo -e "${COLOR_YELLOW}═══════════════════════════════════════${COLOR_RESET}"
+            echo -e "${COLOR_WHITE}Cannot be disabled in current location${COLOR_RESET}"
+            echo -e "${COLOR_YELLOW}═══════════════════════════════════════${COLOR_RESET}"
+            echo ""
+            echo "To enable project-level control:"
+            echo -e "  Press ${COLOR_CYAN}SPACE${COLOR_RESET} to migrate to ./.mcp.json"
+            echo ""
+            echo "Migration will:"
+            echo -e "  ${COLOR_GREEN}•${COLOR_RESET} Move definition to ./.mcp.json"
+            echo -e "  ${COLOR_GREEN}•${COLOR_RESET} Remove from $def_file"
+            echo -e "  ${COLOR_GREEN}•${COLOR_RESET} Enable disable/enable toggling"
+            echo -e "  ${COLOR_YELLOW}•${COLOR_RESET} Backup created automatically"
+            echo ""
+            echo "────────────────────────────────────────"
+            echo -e "Press ${COLOR_CYAN}SPACE${COLOR_RESET} to migrate and disable"
+            return
         else
-            state_type="Disabled"
+            # Direct server that has been migrated
+            if [[ "$current_state" == "on" ]]; then
+                echo -e "  ${COLOR_GREEN}Enabled${COLOR_RESET} (migrated)"
+            else
+                echo -e "  ${COLOR_RED}Disabled${COLOR_RESET} (migrated)"
+            fi
         fi
-        echo -e "${COLOR_CYAN}$state_type In:${COLOR_RESET} $state_file ($state_scope)"
-    fi
-
-    echo ""
-
-    # Show all sources if there are multiple definitions or enable/disable directives
-    local def_count
-    def_count=$(echo "$all_sources" | grep "^def:" | wc -l)
-    local state_count
-    state_count=$(echo "$all_sources" | grep -E "^(enable|disable):" | wc -l)
-
-    if [[ $def_count -gt 1 ]] || [[ $state_count -gt 1 ]]; then
-        echo -e "${COLOR_CYAN}All Sources:${COLOR_RESET}"
-        while IFS=: read -r type srv scope file; do
-            local display_type
-            case "$type" in
-                def) display_type="${COLOR_BLUE}DEFINED${COLOR_RESET}" ;;
-                enable) display_type="${COLOR_GREEN}ENABLED${COLOR_RESET}" ;;
-                disable) display_type="${COLOR_RED}DISABLED${COLOR_RESET}" ;;
-            esac
-
-            local marker=""
-            # Mark active definition
-            if [[ "$type" == "def" ]] && [[ "$scope" == "$def_scope" ]] && [[ "$file" == "$def_file" ]]; then
-                marker=" ${COLOR_GREEN}✓ active${COLOR_RESET}"
-            fi
-            # Mark active state
-            if [[ "$type" == "enable" || "$type" == "disable" ]] && [[ "$scope" == "$state_scope" ]] && [[ "$file" == "$state_file" ]]; then
-                marker=" ${COLOR_GREEN}✓ active${COLOR_RESET}"
-            fi
-
-            echo -e "  • $file ($scope) - $display_type$marker"
-        done <<< "$all_sources"
-        echo ""
-    fi
-
-    # Current and pending status
-    local current_status
-    local pending_status
-    if [[ "$current_state" == "on" ]]; then
-        current_status="${COLOR_GREEN}Enabled${COLOR_RESET}"
-        pending_status="${COLOR_GREEN}Enabled${COLOR_RESET}"
     else
-        current_status="${COLOR_RED}Disabled${COLOR_RESET}"
-        pending_status="${COLOR_RED}Disabled${COLOR_RESET}"
+        # MCPJSON server - normal controllable server
+        if [[ "$current_state" == "on" ]]; then
+            echo -e "  ${COLOR_GREEN}Enabled${COLOR_RESET}"
+        else
+            echo -e "  ${COLOR_RED}Disabled${COLOR_RESET}"
+        fi
     fi
+    echo ""
 
-    echo -e "${COLOR_CYAN}Current Status:${COLOR_RESET} $current_status"
-    echo -e "${COLOR_CYAN}After Confirm:${COLOR_RESET} $pending_status"
+    # Write target
+    echo "────────────────────────────────────────"
+    echo -e "${COLOR_YELLOW}Changes write to:${COLOR_RESET}"
+    echo "  ./.claude/settings.local.json"
+    echo "────────────────────────────────────────"
     echo ""
-    echo -e "${COLOR_YELLOW}Changes saved to:${COLOR_RESET} ./.claude/settings.local.json"
-    echo ""
-    echo -e "${COLOR_YELLOW}Tip:${COLOR_RESET} Press ${COLOR_CYAN}SPACE${COLOR_RESET} to toggle"
+    echo -e "Press ${COLOR_CYAN}SPACE${COLOR_RESET} to toggle"
 }
 
 # ============================================================================
@@ -930,15 +1266,18 @@ launch_fzf_tui() {
     export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_BLUE COLOR_CYAN COLOR_WHITE
     export -f toggle_server generate_fzf_list add_server remove_server
     export -f enable_all_servers disable_all_servers
-    export -f add_server_flow remove_server_flow msg_error msg_warning msg_success
+    export -f add_server_flow remove_server_flow msg_error msg_warning msg_success msg_info
     export -f discover_and_parse_all_sources get_scope_priority generate_preview
     export -f parse_settings_file parse_mcp_json_file parse_claude_json_file detect_file_format
+    export -f is_server_migrated mark_server_migrated get_server_source_type
+    export -f get_server_definition_location extract_server_definition
+    export -f migrate_server_to_project_mcpjson prompt_for_migration load_servers
 
     clear
     msg_header "MCP Server Selector v${VERSION}"
     echo -e "${COLOR_YELLOW}Write Target:${COLOR_RESET} ./.claude/settings.local.json"
-    echo -e "${COLOR_YELLOW}Definitions:${COLOR_RESET} ~/.claude.json (user & local), ./.mcp.json (project)"
-    echo -e "${COLOR_YELLOW}Enable/Disable:${COLOR_RESET} ~/.claude.json projects + all settings files"
+    echo -e "${COLOR_YELLOW}Controllable:${COLOR_RESET} Servers from .mcp.json files"
+    echo -e "${COLOR_YELLOW}Migration:${COLOR_RESET} Direct servers (from ~/.claude.json) can be migrated"
     echo ""
 
     # Count servers by scope
@@ -971,7 +1310,8 @@ launch_fzf_tui() {
         --prompt="Filter: " \
         --pointer="▶" \
         --marker="→" \
-        --header="[SPACE] Toggle | [ENTER] Save & Exit | [ESC] Cancel | [Ctrl-A] Add | [Ctrl-X] Remove
+        --header="[SPACE] Toggle | [ENTER] Save & Exit | [ESC] Cancel
+[Ctrl-A] Add Server | [Ctrl-X] Remove Server
 [Alt-E] Enable All | [Alt-D] Disable All" \
         --preview="generate_preview {}" \
         --preview-window="right:50%:wrap" \
@@ -1012,10 +1352,10 @@ launch_fzf_tui() {
             msg_warning "No servers enabled"
         else
             echo -e "${COLOR_CYAN}Enabled servers (${new_enabled_count}):${COLOR_RESET}"
-            while IFS=: read -r state server scope file; do
+            while IFS=: read -r state server scope file source_type; do
                 if [[ "$state" == "on" ]]; then
                     local dim='\033[2m'
-                    echo -e "  ${COLOR_GREEN}${MARK_SUCCESS}${COLOR_RESET} $server ${dim}($scope)${COLOR_RESET}"
+                    echo -e "  ${COLOR_GREEN}${MARK_SUCCESS}${COLOR_RESET} $server ${dim}($scope, $source_type)${COLOR_RESET}"
                 fi
             done < "$STATE_FILE"
         fi

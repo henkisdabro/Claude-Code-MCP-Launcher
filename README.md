@@ -306,8 +306,6 @@ cc-mcp-launcher/
 ├── mcp              # Main executable
 ├── install.sh       # Installation script
 ├── README.md        # This file
-├── prd.md           # Product requirements document
-└── prd-addendum.md  # Additional requirements
 ```
 
 ### Testing

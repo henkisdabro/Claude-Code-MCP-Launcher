@@ -54,7 +54,7 @@ The tool reads from all available configuration files and merges them with prece
 
 **Concept 2: Enable/Disable State** (`enabledMcpjsonServers`/`disabledMcpjsonServers` arrays)
 - **What**: Toggle switches for servers (ON/OFF)
-- **Where**: Can exist in any settings file
+- **Where**: Can exist in settings files (`.claude/settings*.json`)
 - **Format**:
 ```json
 {
@@ -64,7 +64,29 @@ The tool reads from all available configuration files and merges them with prece
 ```
 - **Purpose**: Controls which defined servers are active
 - **Precedence**: Same hierarchy applies (local > project > user)
-- **Default**: Servers default to disabled unless explicitly enabled
+- **CRITICAL LIMITATION**: These arrays ONLY work for servers defined in `.mcp.json` files
+- **Servers in `~/.claude.json`**: Always enabled, cannot be controlled via these arrays
+
+### Server Types
+
+The tool categorizes servers into three types based on their source:
+
+1. **MCPJSON Servers** (from `.mcp.json` files)
+   - **Controllable**: Yes, via `enabledMcpjsonServers`/`disabledMcpjsonServers`
+   - **Sources**: `~/.mcp.json` (user scope), `./.mcp.json` (project scope)
+   - **UI Indicator**: `[ON]` or `[OFF]` with green/red color
+
+2. **Direct-Global Servers** (from `~/.claude.json` root `.mcpServers`)
+   - **Controllable**: No, always enabled
+   - **Sources**: `~/.claude.json` root level `.mcpServers` object
+   - **UI Indicator**: `[⚠]` with yellow color, labeled "always-on"
+   - **Migration**: Can be migrated to `./.mcp.json` for project-level control
+
+3. **Direct-Local Servers** (from `~/.claude.json` `.projects[cwd].mcpServers`)
+   - **Controllable**: No, always enabled
+   - **Sources**: `~/.claude.json` `.projects[cwd].mcpServers` object
+   - **UI Indicator**: `[⚠]` with yellow color, labeled "always-on"
+   - **Migration**: Can be migrated to `./.mcp.json` for project-level control
 
 ### Dual Precedence Resolution
 
@@ -181,15 +203,17 @@ Higher priority wins independently for both definitions and state.
 
 Internal state file stores merged results of dual precedence:
 ```
-on:fetch:project:./.claude/settings.json
-off:time:user:~/.mcp.json
+on:fetch:project:./.mcp.json:mcpjson
+on:time:user:~/.claude.json:direct-global
+off:github:project:./.mcp.json:mcpjson
 ```
 
-Format: `state:server:def_scope:def_file`
-- `state`: on/off (from enable/disable precedence)
+Format: `state:server:def_scope:def_file:source_type`
+- `state`: on/off (from enable/disable precedence or always-on for direct servers)
 - `server`: server name
 - `def_scope`: scope where server is DEFINED (local/project/user)
 - `def_file`: file where winning server definition lives
+- `source_type`: mcpjson, direct-global, or direct-local
 
 **Important**: The scope/file shown is where the server is DEFINED, NOT where it's enabled/disabled. These can differ!
 
@@ -243,16 +267,61 @@ Enabled In: ~/.claude/settings.json (user)
 Current Status: Enabled
 ```
 
+## Migration System
+
+### Why Migration is Needed
+
+Servers defined in `~/.claude.json` (root `.mcpServers` or `.projects[cwd].mcpServers`) are **always enabled** by Claude Code. The `enabledMcpjsonServers`/`disabledMcpjsonServers` arrays are **ignored** for these servers.
+
+To enable project-level control, the tool can migrate these servers to `./.mcp.json` (project scope).
+
+### Migration Process
+
+When user tries to disable a direct server (marked with `[⚠]`):
+
+1. **Detection**: Tool detects server is a "direct" type (always enabled)
+2. **Prompt**: User is shown migration options:
+   - `[y]` Migrate and disable (recommended)
+   - `[v]` View full server definition first
+   - `[n]` Keep enabled globally (cancel)
+3. **Backup**: Automatic timestamped backup of `~/.claude.json` created
+4. **Migration Steps** (if user confirms):
+   - Extract server definition from `~/.claude.json`
+   - Add server to `./.mcp.json` (creates file if needed)
+   - Remove server from `~/.claude.json`
+   - Validate both JSON files
+   - Mark server as migrated (prevents re-prompting)
+   - Reload server list
+5. **Control**: Server is now controllable via enable/disable arrays
+6. **Rollback**: If any step fails, automatic rollback to backup
+
+### Migration Tracking
+
+- Migrated servers are tracked in `./.claude/.mcp_migrations`
+- Format: `server_name:timestamp`
+- Prevents re-prompting for already migrated servers
+- Migrated servers show as normal controllable servers after migration
+
+### Migration Safety Features
+
+- **Explicit Consent**: User must confirm before any modification
+- **Automatic Backups**: Timestamped backup before modifying `~/.claude.json`
+- **Atomic Operations**: All file updates use temp files + atomic move
+- **JSON Validation**: Validates both source and destination files
+- **Rollback on Failure**: Restores backup if any step fails
+- **Error Recovery**: Detailed error messages guide user
+
 ## Important Notes
 
-- **Never modifies global user settings** - all changes go to project-local `./.claude/settings.local.json`
-- **Never modifies server definitions** - only writes `enabledMcpjsonServers`/`disabledMcpjsonServers` arrays
-- **Scope labels show definition source** - `[ON] fetch (project)` means fetch is DEFINED in project scope (may be enabled elsewhere)
+- **CAN modify global config** - ONLY when user explicitly requests migration
+- **Server definitions**: Tool can move definitions during migration (with consent)
+- **Scope labels show definition source** - `[ON] fetch (project, mcpjson)` shows controllable server
+- **Warning indicator** - `[⚠] time (user, always-on)` shows direct server needs migration
 - **Dual precedence** - Definition source and enable/disable state resolved independently
 - Configuration updates are atomic (no partial writes)
 - Handles empty/malformed JSON gracefully (skips bad files, continues with others)
-- Servers default to disabled unless explicitly enabled in an enable/disable array
-- Preview window updates on every toggle/change and shows both definition and state sources
+- MCPJSON servers default to enabled unless explicitly disabled
+- Preview window updates on every toggle/change and shows migration instructions for direct servers
 - Exit code 130 from `fzf` = user cancelled (ESC/Ctrl-C)
 - Creates `.claude/` directory automatically if needed
 
