@@ -150,40 +150,155 @@ check_dependencies() {
 }
 
 # ============================================================================
+# FORMAT DETECTION & PARSING
+# ============================================================================
+
+# Detect configuration file format
+# Args: $1 - file path
+# Returns: "mcp" or "settings" or "unknown"
+detect_file_format() {
+    local file="$1"
+
+    if [[ ! -f "$file" ]]; then
+        echo "unknown"
+        return 1
+    fi
+
+    if ! jq empty "$file" 2>/dev/null; then
+        echo "unknown"
+        return 1
+    fi
+
+    # Check for mcpServers object
+    if jq -e '.mcpServers' "$file" >/dev/null 2>&1; then
+        echo "mcp"
+        return 0
+    fi
+
+    # Check for enabledMcpjsonServers or disabledMcpjsonServers arrays
+    if jq -e '.enabledMcpjsonServers' "$file" >/dev/null 2>&1 || \
+       jq -e '.disabledMcpjsonServers' "$file" >/dev/null 2>&1; then
+        echo "settings"
+        return 0
+    fi
+
+    echo "unknown"
+    return 1
+}
+
+# Get numeric priority for scope (for precedence resolution)
+# Args: $1 - scope label (local/project/user)
+# Returns: numeric priority (3=highest, 1=lowest)
+get_scope_priority() {
+    case "$1" in
+        local) echo 3 ;;
+        project) echo 2 ;;
+        user) echo 1 ;;
+        *) echo 0 ;;
+    esac
+}
+
+# Parse settings file (extracts BOTH mcpServers definitions AND enable/disable arrays)
+# Args: $1 - file path, $2 - scope label (local/project/user)
+# Output: Lines in format "type:server:scope:file"
+# Types: def (server defined), enable (server enabled), disable (server disabled)
+# Example: def:fetch:user:~/.claude/settings.json
+#          enable:fetch:user:~/.claude/settings.json
+parse_settings_file() {
+    local file="$1"
+    local scope="$2"
+
+    if [[ ! -f "$file" ]] || ! jq empty "$file" 2>/dev/null; then
+        return 0
+    fi
+
+    # Extract server definitions from mcpServers object
+    local definitions
+    definitions=$(jq -r '.mcpServers | keys[]? // empty' "$file" 2>/dev/null | sort -u)
+
+    # Extract enabled servers
+    local enabled
+    enabled=$(jq -r '.enabledMcpjsonServers[]? // empty' "$file" 2>/dev/null | sort -u)
+
+    # Extract disabled servers
+    local disabled
+    disabled=$(jq -r '.disabledMcpjsonServers[]? // empty' "$file" 2>/dev/null | sort -u)
+
+    # Output server definitions
+    if [[ -n "$definitions" ]]; then
+        while IFS= read -r server; do
+            [[ -n "$server" ]] && echo "def:$server:$scope:$file"
+        done <<< "$definitions"
+    fi
+
+    # Output enabled servers
+    if [[ -n "$enabled" ]]; then
+        while IFS= read -r server; do
+            [[ -n "$server" ]] && echo "enable:$server:$scope:$file"
+        done <<< "$enabled"
+    fi
+
+    # Output disabled servers
+    if [[ -n "$disabled" ]]; then
+        while IFS= read -r server; do
+            [[ -n "$server" ]] && echo "disable:$server:$scope:$file"
+        done <<< "$disabled"
+    fi
+}
+
+# Parse .mcp.json file (mcpServers object format only, no enable/disable arrays)
+# Args: $1 - file path, $2 - scope label (local/project/user)
+# Output: Lines in format "def:server:scope:file"
+# Example: def:coingecko:project:./.mcp.json
+parse_mcp_json_file() {
+    local file="$1"
+    local scope="$2"
+
+    if [[ ! -f "$file" ]] || ! jq empty "$file" 2>/dev/null; then
+        return 0
+    fi
+
+    # Extract server names from mcpServers object keys
+    local servers
+    servers=$(jq -r '.mcpServers | keys[]? // empty' "$file" 2>/dev/null | sort -u)
+
+    if [[ -n "$servers" ]]; then
+        while IFS= read -r server; do
+            [[ -n "$server" ]] && echo "def:$server:$scope:$file"
+        done <<< "$servers"
+    fi
+}
+
+# ============================================================================
 # CONFIGURATION DISCOVERY & NEW PROJECT FLOW
 # ============================================================================
 
-# Discover settings file with priority order:
-# 1. ./.claude/settings.local.json (local override)
-# 2. ./.claude/settings.json (legacy local)
-# 3. New project flow (if global exists)
-# Sets global variables: SETTINGS_FILE_PATH, SETTINGS_SCOPE
+# Check for configuration and handle new project flow if needed
+# No longer sets SETTINGS_FILE_PATH or SETTINGS_SCOPE (multi-source approach)
 discover_settings_file() {
     local current_dir
     current_dir=$(pwd)
 
-    # Priority 1: Local override
-    if [[ -f "$current_dir/.claude/settings.local.json" ]]; then
-        SETTINGS_FILE_PATH="$current_dir/.claude/settings.local.json"
-        SETTINGS_SCOPE="project (local)"
+    # Check if any local config exists
+    if [[ -f "$current_dir/.claude/settings.local.json" ]] || \
+       [[ -f "$current_dir/.claude/settings.json" ]] || \
+       [[ -f "$current_dir/.mcp.json" ]]; then
+        # Local config exists, proceed normally
         return 0
     fi
 
-    # Priority 2: Legacy local
-    if [[ -f "$current_dir/.claude/settings.json" ]]; then
-        SETTINGS_FILE_PATH="$current_dir/.claude/settings.json"
-        SETTINGS_SCOPE="project"
-        return 0
-    fi
-
-    # Priority 3: Check if global exists, trigger new project flow
-    if [[ -f "$HOME/.claude/settings.json" ]]; then
+    # No local config, check if global exists
+    if [[ -f "$HOME/.claude/settings.json" ]] || \
+       [[ -f "$HOME/.claude/settings.local.json" ]] || \
+       [[ -f "$HOME/.claude.json" ]] || \
+       [[ -f "$HOME/.mcp.json" ]]; then
+        # Global config exists, trigger new project flow
         handle_new_project_prompt
         return $?
     fi
 
     # No configuration found anywhere
-    msg_error "No local or global Claude configuration found"
+    msg_error "No Claude configuration found (local or global)"
     echo ""
     echo "Please configure Claude first by running 'claude' once."
     exit 1
@@ -196,12 +311,12 @@ handle_new_project_prompt() {
     msg_header "New Project Detected"
     echo ""
     echo "You are in a directory without a local Claude configuration."
-    echo "The global configuration will be used as a template."
+    echo "Global configuration will be used as a template."
     echo ""
     echo "What would you like to do?"
     echo ""
-    echo "  ${COLOR_GREEN}1)${COLOR_RESET} Create a new local configuration (.claude/settings.local.json) for this project ${COLOR_CYAN}(Recommended)${COLOR_RESET}"
-    echo "  ${COLOR_YELLOW}2)${COLOR_RESET} Use global settings for this command only (no changes will be saved)"
+    echo "  ${COLOR_GREEN}1)${COLOR_RESET} Create local configuration (.claude/settings.local.json) for this project ${COLOR_CYAN}(Recommended)${COLOR_RESET}"
+    echo "  ${COLOR_YELLOW}2)${COLOR_RESET} Continue with global settings only (changes will still be saved to local)"
     echo "  ${COLOR_RED}3)${COLOR_RESET} Abort"
     echo ""
 
@@ -210,31 +325,37 @@ handle_new_project_prompt() {
 
     case "$choice" in
         1)
-            # Create local config
+            # Create local config from global template
             msg_info "Creating local configuration..."
             mkdir -p ./.claude
-            cp "$HOME/.claude/settings.json" "./.claude/settings.local.json"
-            SETTINGS_FILE_PATH="./.claude/settings.local.json"
-            SETTINGS_SCOPE="project (local)"
-            msg_success "Created ./.claude/settings.local.json"
+
+            # Find global settings file to use as template
+            local template=""
+            if [[ -f "$HOME/.claude/settings.json" ]]; then
+                template="$HOME/.claude/settings.json"
+            elif [[ -f "$HOME/.claude/settings.local.json" ]]; then
+                template="$HOME/.claude/settings.local.json"
+            elif [[ -f "$HOME/.claude.json" ]]; then
+                template="$HOME/.claude.json"
+            else
+                # Create empty settings
+                echo '{}' > "./.claude/settings.local.json"
+                msg_success "Created empty ./.claude/settings.local.json"
+                echo ""
+                return 0
+            fi
+
+            cp "$template" "./.claude/settings.local.json"
+            msg_success "Created ./.claude/settings.local.json from $template"
             echo ""
             return 0
             ;;
         2)
-            # Use global, skip TUI
-            msg_info "Using global settings for this session..."
+            # Continue without creating local config
+            # Changes will still be saved to .claude/settings.local.json when user confirms
+            msg_info "Continuing with global settings..."
             echo ""
-            # Find the real claude binary
-            local claude_bin
-            if [[ -L "$HOME/.local/bin/claude" ]]; then
-                claude_bin=$(realpath_portable "$HOME/.local/bin/claude")
-            elif command -v claude &> /dev/null; then
-                claude_bin=$(command -v claude)
-            else
-                msg_error "Cannot find claude binary"
-                exit 1
-            fi
-            exec "$claude_bin" "$@"
+            return 0
             ;;
         3|*)
             # Abort
@@ -248,73 +369,168 @@ handle_new_project_prompt() {
 # STATE MANAGEMENT
 # ============================================================================
 
-# Load servers from settings file into state file
-# State format: "on:server-name" or "off:server-name" (one per line)
+# Discover and parse all 7 configuration sources
+# Output: Lines in format "state:server:scope:file" or "defined:server:scope:file"
+discover_and_parse_all_sources() {
+    local temp_raw
+    temp_raw=$(mktemp)
+
+    # Define all 7 sources in reverse precedence order (lowest to highest)
+    # User scope (lowest priority)
+    parse_mcp_json_file "$HOME/.mcp.json" "user" >> "$temp_raw"
+    parse_settings_file "$HOME/.claude.json" "user" >> "$temp_raw"
+    parse_settings_file "$HOME/.claude/settings.json" "user" >> "$temp_raw"
+    parse_settings_file "$HOME/.claude/settings.local.json" "user" >> "$temp_raw"
+
+    # Project scope
+    parse_mcp_json_file "./.mcp.json" "project" >> "$temp_raw"
+    parse_settings_file "./.claude/settings.json" "project" >> "$temp_raw"
+
+    # Local scope (highest priority)
+    parse_settings_file "./.claude/settings.local.json" "local" >> "$temp_raw"
+
+    cat "$temp_raw"
+    rm -f "$temp_raw"
+}
+
+# Load servers from all sources with DUAL precedence resolution
+# Separates server definitions from enable/disable state
+# State format: "state:server:def_scope:def_file" (one per line)
+# Example: "on:fetch:project:./.claude/settings.json"
+# Where state=on/off, def_scope/def_file=where server is DEFINED
 load_servers() {
-    # Validate JSON first
-    if ! jq empty "$SETTINGS_FILE_PATH" 2>/dev/null; then
-        msg_error "Settings file is malformed JSON: $SETTINGS_FILE_PATH"
-        exit 1
-    fi
+    local raw_data
+    raw_data=$(discover_and_parse_all_sources)
 
-    # Read enabled and disabled arrays
-    local enabled
-    local disabled
-    enabled=$(jq -r '.enabledMcpjsonServers[]? // empty' "$SETTINGS_FILE_PATH" 2>/dev/null | sort -u)
-    disabled=$(jq -r '.disabledMcpjsonServers[]? // empty' "$SETTINGS_FILE_PATH" 2>/dev/null | sort -u)
-
-    # Get all unique servers
-    local all_servers
-    all_servers=$(printf "%s\n%s" "$enabled" "$disabled" | sort -u | grep -v '^$' || true)
-
-    if [[ -z "$all_servers" ]]; then
-        msg_warning "No MCP servers found in configuration"
+    if [[ -z "$raw_data" ]]; then
+        msg_warning "No MCP servers found in any configuration file"
         echo ""
         msg_info "You can add servers using Ctrl-A in the TUI"
         echo ""
-        # Create empty state file
         touch "$STATE_FILE"
         return 0
     fi
 
-    # Build state file
-    > "$STATE_FILE"  # Truncate
-    while IFS= read -r server; do
-        if [[ -n "$enabled" ]] && echo "$enabled" | grep -q "^${server}$"; then
-            echo "on:$server" >> "$STATE_FILE"
-        else
-            echo "off:$server" >> "$STATE_FILE"
+    # Build two separate maps for dual precedence resolution
+    # Map 1: Server definitions (where server is configured)
+    # Key: server_name, Value: priority:scope:file
+    declare -A server_definitions
+
+    # Map 2: Enable/disable state (whether server is active)
+    # Key: server_name, Value: priority:state (on/off)
+    declare -A server_states
+
+    # Parse raw data and populate both maps
+    while IFS=: read -r type server scope file; do
+        [[ -z "$server" ]] && continue
+
+        local priority
+        priority=$(get_scope_priority "$scope")
+
+        if [[ "$type" == "def" ]]; then
+            # This is a server definition
+            local new_value="$priority:$scope:$file"
+
+            if [[ -n "${server_definitions[$server]:-}" ]]; then
+                local existing_priority
+                existing_priority=$(echo "${server_definitions[$server]}" | cut -d: -f1)
+
+                # Higher priority wins (3 > 2 > 1)
+                if [[ $priority -gt $existing_priority ]]; then
+                    server_definitions[$server]="$new_value"
+                fi
+            else
+                server_definitions[$server]="$new_value"
+            fi
+
+        elif [[ "$type" == "enable" ]]; then
+            # This is an enable directive
+            local new_value="$priority:on"
+
+            if [[ -n "${server_states[$server]:-}" ]]; then
+                local existing_priority
+                existing_priority=$(echo "${server_states[$server]}" | cut -d: -f1)
+
+                if [[ $priority -gt $existing_priority ]]; then
+                    server_states[$server]="$new_value"
+                fi
+            else
+                server_states[$server]="$new_value"
+            fi
+
+        elif [[ "$type" == "disable" ]]; then
+            # This is a disable directive
+            local new_value="$priority:off"
+
+            if [[ -n "${server_states[$server]:-}" ]]; then
+                local existing_priority
+                existing_priority=$(echo "${server_states[$server]}" | cut -d: -f1)
+
+                if [[ $priority -gt $existing_priority ]]; then
+                    server_states[$server]="$new_value"
+                fi
+            else
+                server_states[$server]="$new_value"
+            fi
         fi
-    done <<< "$all_servers"
+    done <<< "$raw_data"
+
+    # Write to state file
+    > "$STATE_FILE"  # Truncate
+
+    # Merge: For each defined server, attach its state
+    for server in "${!server_definitions[@]}"; do
+        local def_value="${server_definitions[$server]}"
+        # Extract scope:file from priority:scope:file
+        local def_scope def_file
+        def_scope=$(echo "$def_value" | cut -d: -f2)
+        def_file=$(echo "$def_value" | cut -d: -f3-)
+
+        # Get state (default to "off" if not mentioned in any enable/disable array)
+        local state="off"
+        if [[ -n "${server_states[$server]:-}" ]]; then
+            local state_value="${server_states[$server]}"
+            state=$(echo "$state_value" | cut -d: -f2)
+        fi
+
+        echo "$state:$server:$def_scope:$def_file" >> "$STATE_FILE"
+    done
+
+    # Sort state file by server name
+    sort -t: -k2 "$STATE_FILE" -o "$STATE_FILE"
 }
 
 # Toggle server state in state file
-# Args: $1 - server name (may have prefix like "[ON ] server-name")
+# Args: $1 - server name (may have prefix like "[ON ] server-name (scope)")
 toggle_server() {
     local raw_input="$1"
 
-    # Strip ANSI codes and prefixes to get clean server name
+    # Strip ANSI codes, prefixes, and scope suffix to get clean server name
     local server
-    server=$(echo "$raw_input" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^\[ON \] *//' | sed 's/^\[OFF\] *//' | sed 's/^     *//')
+    server=$(echo "$raw_input" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^\[ON \] *//' | sed 's/^\[OFF\] *//' | sed 's/^     *//' | sed 's/ *(.*)$//')
 
-    # Read state file, toggle the server, write back
+    # Read state file, toggle the server, write back (preserve scope and file)
     local temp_state
     temp_state=$(mktemp)
 
-    while IFS= read -r line; do
-        if [[ "$line" == "on:$server" ]]; then
-            echo "off:$server" >> "$temp_state"
-        elif [[ "$line" == "off:$server" ]]; then
-            echo "on:$server" >> "$temp_state"
+    while IFS=: read -r state srv scope file; do
+        if [[ "$srv" == "$server" ]]; then
+            # Toggle state, preserve scope and file
+            if [[ "$state" == "on" ]]; then
+                echo "off:$srv:$scope:$file" >> "$temp_state"
+            else
+                echo "on:$srv:$scope:$file" >> "$temp_state"
+            fi
         else
-            echo "$line" >> "$temp_state"
+            # Keep unchanged
+            echo "$state:$srv:$scope:$file" >> "$temp_state"
         fi
     done < "$STATE_FILE"
 
     mv "$temp_state" "$STATE_FILE"
 }
 
-# Add new server to state file (disabled by default)
+# Add new server to state file (disabled by default, local scope)
 # Args: $1 - server name
 add_server() {
     local server="$1"
@@ -325,63 +541,85 @@ add_server() {
         return 1
     fi
 
-    # Check for duplicates
-    if grep -q ":$server$" "$STATE_FILE" 2>/dev/null; then
+    # Check for duplicates (check column 2 for server name)
+    if grep -q "^[^:]*:$server:" "$STATE_FILE" 2>/dev/null; then
         msg_warning "Server '$server' already exists"
         return 1
     fi
 
-    # Add to state file (disabled)
-    echo "off:$server" >> "$STATE_FILE"
-    sort -u "$STATE_FILE" -o "$STATE_FILE"
+    # Add to state file (disabled, local scope, project-local settings file)
+    echo "off:$server:local:./.claude/settings.local.json" >> "$STATE_FILE"
+    sort -t: -k2 "$STATE_FILE" -o "$STATE_FILE"
 }
 
 # Remove server from state file
-# Args: $1 - server name (may have prefix)
+# Args: $1 - server name (may have prefix and scope suffix)
 remove_server() {
     local raw_input="$1"
 
-    # Strip ANSI codes and prefixes
+    # Strip ANSI codes, prefixes, and scope suffix
     local server
-    server=$(echo "$raw_input" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^\[ON \] *//' | sed 's/^\[OFF\] *//' | sed 's/^     *//')
+    server=$(echo "$raw_input" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^\[ON \] *//' | sed 's/^\[OFF\] *//' | sed 's/^     *//' | sed 's/ *(.*)$//')
 
-    # Remove from state file
+    # Remove from state file (match server name in column 2)
     local temp_state
     temp_state=$(mktemp)
 
-    grep -v ":$server$" "$STATE_FILE" > "$temp_state" || true
+    while IFS=: read -r state srv scope file; do
+        if [[ "$srv" != "$server" ]]; then
+            echo "$state:$srv:$scope:$file" >> "$temp_state"
+        fi
+    done < "$STATE_FILE"
+
     mv "$temp_state" "$STATE_FILE"
 }
 
-# Enable all servers in state file
+# Enable all servers in state file (preserve scope and file metadata)
 enable_all_servers() {
     local temp_state
     temp_state=$(mktemp)
 
-    sed 's/^off:/on:/' "$STATE_FILE" > "$temp_state"
+    while IFS=: read -r state srv scope file; do
+        echo "on:$srv:$scope:$file" >> "$temp_state"
+    done < "$STATE_FILE"
+
     mv "$temp_state" "$STATE_FILE"
 }
 
-# Disable all servers in state file
+# Disable all servers in state file (preserve scope and file metadata)
 disable_all_servers() {
     local temp_state
     temp_state=$(mktemp)
 
-    sed 's/^on:/off:/' "$STATE_FILE" > "$temp_state"
+    while IFS=: read -r state srv scope file; do
+        echo "off:$srv:$scope:$file" >> "$temp_state"
+    done < "$STATE_FILE"
+
     mv "$temp_state" "$STATE_FILE"
 }
 
-# Save state file back to settings.json atomically
+# Save state file to project-local settings only (./.claude/settings.local.json)
+# Never modifies global user settings
 save_state_to_settings() {
-    # Parse state file into enabled and disabled arrays
+    local target="./.claude/settings.local.json"
+
+    # Create .claude directory if it doesn't exist
+    if [[ ! -d "./.claude" ]]; then
+        mkdir -p "./.claude"
+        msg_info "Created .claude/ directory"
+    fi
+
+    # Parse state file into enabled and disabled arrays (server names only)
     local enabled_servers=()
     local disabled_servers=()
 
-    while IFS= read -r line; do
-        if [[ "$line" == on:* ]]; then
-            enabled_servers+=("${line#on:}")
-        elif [[ "$line" == off:* ]]; then
-            disabled_servers+=("${line#off:}")
+    while IFS=: read -r state server scope file; do
+        [[ -z "$server" ]] && continue
+
+        if [[ "$state" == "on" ]]; then
+            enabled_servers+=("$server")
+        elif [[ "$state" == "off" ]]; then
+            disabled_servers+=("$server")
         fi
     done < "$STATE_FILE"
 
@@ -401,16 +639,22 @@ save_state_to_settings() {
         disabled_json=$(printf '%s\n' "${disabled_servers[@]}" | jq -R . | jq -s -c .)
     fi
 
-    # Atomic update using temp file
+    # Initialize with empty object if file doesn't exist
+    if [[ ! -f "$target" ]]; then
+        echo '{}' > "$target"
+        msg_info "Created $target"
+    fi
+
+    # Atomic update using temp file (merge with existing settings)
     local temp_file
     temp_file=$(mktemp)
 
     jq --argjson enabled "$enabled_json" \
        --argjson disabled "$disabled_json" \
        '.enabledMcpjsonServers = $enabled | .disabledMcpjsonServers = $disabled' \
-       "$SETTINGS_FILE_PATH" > "$temp_file"
+       "$target" > "$temp_file"
 
-    mv "$temp_file" "$SETTINGS_FILE_PATH"
+    mv "$temp_file" "$target"
 }
 
 # ============================================================================
@@ -418,54 +662,146 @@ save_state_to_settings() {
 # ============================================================================
 
 # Generate fzf list from state file
-# Output format: "[ON ] server-name" or "[OFF] server-name"
+# Output format: "[ON ] server-name (scope)" or "[OFF] server-name (scope)"
 generate_fzf_list() {
     if [[ ! -f "$STATE_FILE" ]] || [[ ! -s "$STATE_FILE" ]]; then
         echo ""
         return
     fi
 
-    while IFS= read -r line; do
-        if [[ "$line" == on:* ]]; then
-            local server="${line#on:}"
-            echo -e "${COLOR_GREEN}[ON ]${COLOR_RESET} $server"
-        elif [[ "$line" == off:* ]]; then
-            local server="${line#off:}"
-            echo -e "${COLOR_RED}[OFF]${COLOR_RESET} $server"
+    local dim='\033[2m'  # Dim/grey color for scope labels
+
+    while IFS=: read -r state server scope file; do
+        [[ -z "$server" ]] && continue
+
+        if [[ "$state" == "on" ]]; then
+            echo -e "${COLOR_GREEN}[ON ]${COLOR_RESET} $server ${dim}($scope)${COLOR_RESET}"
+        elif [[ "$state" == "off" ]]; then
+            echo -e "${COLOR_RED}[OFF]${COLOR_RESET} $server ${dim}($scope)${COLOR_RESET}"
         fi
     done < "$STATE_FILE"
 }
 
 # Generate preview for selected server
-# Args: $1 - full line from fzf (e.g., "[ON ] server-name")
+# Args: $1 - full line from fzf (e.g., "[ON ] server-name (scope)")
 generate_preview() {
     local raw_input="$1"
 
-    # Strip ANSI codes and prefixes
+    # Strip ANSI codes, prefixes, and scope suffix
     local server
-    server=$(echo "$raw_input" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^\[ON \] *//' | sed 's/^\[OFF\] *//' | sed 's/^     *//')
+    server=$(echo "$raw_input" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^\[ON \] *//' | sed 's/^\[OFF\] *//' | sed 's/^     *//' | sed 's/ *(.*)$//')
 
     if [[ -z "$server" ]]; then
         echo "No server selected"
         return
     fi
 
-    # Find current state and pending state
-    local current_state="Unknown"
-    local pending_state="Unknown"
+    # Find effective state and definition source from state file
+    local current_state=""
+    local def_scope=""
+    local def_file=""
 
-    if grep -q "^on:$server$" "$STATE_FILE" 2>/dev/null; then
-        current_state="${COLOR_GREEN}Enabled${COLOR_RESET}"
-        pending_state="${COLOR_GREEN}Enabled${COLOR_RESET}"
-    elif grep -q "^off:$server$" "$STATE_FILE" 2>/dev/null; then
-        current_state="${COLOR_RED}Disabled${COLOR_RESET}"
-        pending_state="${COLOR_RED}Disabled${COLOR_RESET}"
+    while IFS=: read -r state srv scope file; do
+        if [[ "$srv" == "$server" ]]; then
+            current_state="$state"
+            def_scope="$scope"
+            def_file="$file"
+            break
+        fi
+    done < "$STATE_FILE"
+
+    if [[ -z "$current_state" ]]; then
+        echo "Server not found in state"
+        return
     fi
 
+    # Get all sources for this server from raw discovery
+    local all_sources
+    all_sources=$(discover_and_parse_all_sources | grep ":$server:")
+
+    # Find where server is enabled/disabled (highest priority enable/disable directive)
+    local state_scope=""
+    local state_file=""
+    local state_priority=0
+
+    while IFS=: read -r type srv scope file; do
+        if [[ "$type" == "enable" ]] || [[ "$type" == "disable" ]]; then
+            local priority
+            priority=$(get_scope_priority "$scope")
+            if [[ $priority -gt $state_priority ]]; then
+                state_priority=$priority
+                state_scope="$scope"
+                state_file="$file"
+            fi
+        fi
+    done <<< "$all_sources"
+
+    # Display header
     echo -e "${COLOR_CYAN}Server:${COLOR_RESET} ${COLOR_WHITE}$server${COLOR_RESET}"
     echo ""
-    echo -e "${COLOR_CYAN}Current Status:${COLOR_RESET} $current_state"
-    echo -e "${COLOR_CYAN}After Confirm:${COLOR_RESET} $pending_state"
+
+    # Show definition source
+    echo -e "${COLOR_CYAN}Defined In:${COLOR_RESET} $def_file ($def_scope)"
+
+    # Show state source if different from definition source
+    if [[ -n "$state_file" ]] && [[ "$state_file" != "$def_file" ]]; then
+        local state_type
+        if [[ "$current_state" == "on" ]]; then
+            state_type="Enabled"
+        else
+            state_type="Disabled"
+        fi
+        echo -e "${COLOR_CYAN}$state_type In:${COLOR_RESET} $state_file ($state_scope)"
+    fi
+
+    echo ""
+
+    # Show all sources if there are multiple definitions or enable/disable directives
+    local def_count
+    def_count=$(echo "$all_sources" | grep "^def:" | wc -l)
+    local state_count
+    state_count=$(echo "$all_sources" | grep -E "^(enable|disable):" | wc -l)
+
+    if [[ $def_count -gt 1 ]] || [[ $state_count -gt 1 ]]; then
+        echo -e "${COLOR_CYAN}All Sources:${COLOR_RESET}"
+        while IFS=: read -r type srv scope file; do
+            local display_type
+            case "$type" in
+                def) display_type="${COLOR_BLUE}DEFINED${COLOR_RESET}" ;;
+                enable) display_type="${COLOR_GREEN}ENABLED${COLOR_RESET}" ;;
+                disable) display_type="${COLOR_RED}DISABLED${COLOR_RESET}" ;;
+            esac
+
+            local marker=""
+            # Mark active definition
+            if [[ "$type" == "def" ]] && [[ "$scope" == "$def_scope" ]] && [[ "$file" == "$def_file" ]]; then
+                marker=" ${COLOR_GREEN}✓ active${COLOR_RESET}"
+            fi
+            # Mark active state
+            if [[ "$type" == "enable" || "$type" == "disable" ]] && [[ "$scope" == "$state_scope" ]] && [[ "$file" == "$state_file" ]]; then
+                marker=" ${COLOR_GREEN}✓ active${COLOR_RESET}"
+            fi
+
+            echo -e "  • $file ($scope) - $display_type$marker"
+        done <<< "$all_sources"
+        echo ""
+    fi
+
+    # Current and pending status
+    local current_status
+    local pending_status
+    if [[ "$current_state" == "on" ]]; then
+        current_status="${COLOR_GREEN}Enabled${COLOR_RESET}"
+        pending_status="${COLOR_GREEN}Enabled${COLOR_RESET}"
+    else
+        current_status="${COLOR_RED}Disabled${COLOR_RESET}"
+        pending_status="${COLOR_RED}Disabled${COLOR_RESET}"
+    fi
+
+    echo -e "${COLOR_CYAN}Current Status:${COLOR_RESET} $current_status"
+    echo -e "${COLOR_CYAN}After Confirm:${COLOR_RESET} $pending_status"
+    echo ""
+    echo -e "${COLOR_YELLOW}Changes saved to:${COLOR_RESET} ./.claude/settings.local.json"
     echo ""
     echo -e "${COLOR_YELLOW}Tip:${COLOR_RESET} Press ${COLOR_CYAN}SPACE${COLOR_RESET} to toggle"
 }
@@ -541,22 +877,31 @@ launch_fzf_tui() {
     export -f toggle_server generate_fzf_list add_server remove_server
     export -f enable_all_servers disable_all_servers
     export -f add_server_flow remove_server_flow msg_error msg_warning msg_success
+    export -f discover_and_parse_all_sources get_scope_priority generate_preview
+    export -f parse_settings_file parse_mcp_json_file detect_file_format
 
     clear
     msg_header "MCP Server Selector v${VERSION}"
-    echo -e "${COLOR_YELLOW}Scope:${COLOR_RESET} $SETTINGS_SCOPE"
-    echo -e "${COLOR_YELLOW}Config:${COLOR_RESET} $SETTINGS_FILE_PATH"
+    echo -e "${COLOR_YELLOW}Write Target:${COLOR_RESET} ./.claude/settings.local.json"
+    echo -e "${COLOR_YELLOW}Reading From:${COLOR_RESET} 7 config sources (local/project/user)"
     echo ""
 
-    # Count servers
+    # Count servers by scope
     local total_count=0
     local enabled_count=0
+    local local_count=0
+    local project_count=0
+    local user_count=0
+
     if [[ -f "$STATE_FILE" ]] && [[ -s "$STATE_FILE" ]]; then
         total_count=$(wc -l < "$STATE_FILE")
         enabled_count=$(grep -c '^on:' "$STATE_FILE" || echo "0")
+        local_count=$(grep -c ':local:' "$STATE_FILE" || echo "0")
+        project_count=$(grep -c ':project:' "$STATE_FILE" || echo "0")
+        user_count=$(grep -c ':user:' "$STATE_FILE" || echo "0")
     fi
 
-    echo -e "${COLOR_CYAN}${total_count} total${COLOR_RESET}  │  ${COLOR_GREEN}${enabled_count} enabled${COLOR_RESET}"
+    echo -e "${COLOR_CYAN}${total_count} total${COLOR_RESET}  │  ${COLOR_GREEN}${enabled_count} enabled${COLOR_RESET}  │  ${COLOR_BLUE}${local_count} local, ${project_count} project, ${user_count} user${COLOR_RESET}"
     echo ""
 
     # Run fzf with dynamic bindings
@@ -573,11 +918,13 @@ launch_fzf_tui() {
         --marker="→" \
         --header="[SPACE] Toggle | [ENTER] Save & Exit | [ESC] Cancel | [Ctrl-A] Add | [Ctrl-X] Remove
 [Alt-E] Enable All | [Alt-D] Disable All" \
-        --bind="space:execute-silent(toggle_server {})+reload(generate_fzf_list)" \
-        --bind="alt-e:execute-silent(enable_all_servers)+reload(generate_fzf_list)" \
-        --bind="alt-d:execute-silent(disable_all_servers)+reload(generate_fzf_list)" \
-        --bind="ctrl-a:execute(add_server_flow)+reload(generate_fzf_list)" \
-        --bind="ctrl-x:execute(remove_server_flow {})+reload(generate_fzf_list)" \
+        --preview="generate_preview {}" \
+        --preview-window="right:50%:wrap" \
+        --bind="space:execute-silent(toggle_server {})+reload(generate_fzf_list)+refresh-preview" \
+        --bind="alt-e:execute-silent(enable_all_servers)+reload(generate_fzf_list)+refresh-preview" \
+        --bind="alt-d:execute-silent(disable_all_servers)+reload(generate_fzf_list)+refresh-preview" \
+        --bind="ctrl-a:execute(add_server_flow)+reload(generate_fzf_list)+refresh-preview" \
+        --bind="ctrl-x:execute(remove_server_flow {})+reload(generate_fzf_list)+refresh-preview" \
         --bind="enter:accept" \
         --bind="esc:abort" \
         --color="fg:#d0d0d0,bg:#121212,hl:#5fff87" \
@@ -610,9 +957,12 @@ launch_fzf_tui() {
             msg_warning "No servers enabled"
         else
             echo -e "${COLOR_CYAN}Enabled servers (${new_enabled_count}):${COLOR_RESET}"
-            grep '^on:' "$STATE_FILE" | sed 's/^on://' | while read -r srv; do
-                echo -e "  ${COLOR_GREEN}${MARK_SUCCESS}${COLOR_RESET} $srv"
-            done
+            while IFS=: read -r state server scope file; do
+                if [[ "$state" == "on" ]]; then
+                    local dim='\033[2m'
+                    echo -e "  ${COLOR_GREEN}${MARK_SUCCESS}${COLOR_RESET} $server ${dim}($scope)${COLOR_RESET}"
+                fi
+            done < "$STATE_FILE"
         fi
 
         echo ""
