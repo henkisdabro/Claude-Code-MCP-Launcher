@@ -353,6 +353,24 @@ remove_server() {
     mv "$temp_state" "$STATE_FILE"
 }
 
+# Enable all servers in state file
+enable_all_servers() {
+    local temp_state
+    temp_state=$(mktemp)
+
+    sed 's/^off:/on:/' "$STATE_FILE" > "$temp_state"
+    mv "$temp_state" "$STATE_FILE"
+}
+
+# Disable all servers in state file
+disable_all_servers() {
+    local temp_state
+    temp_state=$(mktemp)
+
+    sed 's/^on:/off:/' "$STATE_FILE" > "$temp_state"
+    mv "$temp_state" "$STATE_FILE"
+}
+
 # Save state file back to settings.json atomically
 save_state_to_settings() {
     # Parse state file into enabled and disabled arrays
@@ -520,7 +538,8 @@ launch_fzf_tui() {
     # Export functions and variables for fzf subshells
     export STATE_FILE
     export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_BLUE COLOR_CYAN COLOR_WHITE
-    export -f toggle_server generate_fzf_list generate_preview add_server remove_server
+    export -f toggle_server generate_fzf_list add_server remove_server
+    export -f enable_all_servers disable_all_servers
     export -f add_server_flow remove_server_flow msg_error msg_warning msg_success
 
     clear
@@ -552,10 +571,11 @@ launch_fzf_tui() {
         --prompt="Filter: " \
         --pointer="▶" \
         --marker="→" \
-        --header="[SPACE] Toggle | [ENTER] Save & Exit | [ESC] Cancel | [Ctrl-A] Add | [Ctrl-X] Remove" \
-        --preview="generate_preview {}" \
-        --preview-window=right:40% \
+        --header="[SPACE] Toggle | [ENTER] Save & Exit | [ESC] Cancel | [Ctrl-A] Add | [Ctrl-X] Remove
+[Alt-E] Enable All | [Alt-D] Disable All" \
         --bind="space:execute-silent(toggle_server {})+reload(generate_fzf_list)" \
+        --bind="alt-e:execute-silent(enable_all_servers)+reload(generate_fzf_list)" \
+        --bind="alt-d:execute-silent(disable_all_servers)+reload(generate_fzf_list)" \
         --bind="ctrl-a:execute(add_server_flow)+reload(generate_fzf_list)" \
         --bind="ctrl-x:execute(remove_server_flow {})+reload(generate_fzf_list)" \
         --bind="enter:accept" \
