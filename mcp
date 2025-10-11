@@ -341,6 +341,17 @@ parse_claude_json_file() {
             [[ -n "$server" ]] && echo "disable:$server:local:$file"
         done <<< "$disabled"
     fi
+
+    # Parse local-scope disabled DIRECT servers (.projects[cwd].disabledMcpServers)
+    # This controls Direct-Global and Direct-Local servers (from .mcpServers sections)
+    local disabled_direct
+    disabled_direct=$(jq -r --arg cwd "$cwd" '.projects[$cwd].disabledMcpServers[]? // empty' "$file" 2>/dev/null | sort -u)
+
+    if [[ -n "$disabled_direct" ]]; then
+        while IFS= read -r server; do
+            [[ -n "$server" ]] && echo "disable:$server:local:$file"
+        done <<< "$disabled_direct"
+    fi
 }
 
 # ============================================================================

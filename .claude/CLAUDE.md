@@ -52,41 +52,87 @@ The tool reads from all available configuration files and merges them with prece
 - **Purpose**: Defines WHAT servers exist and HOW to run them
 - **Precedence**: When same server defined in multiple files, local > project > user
 
-**Concept 2: Enable/Disable State** (`enabledMcpjsonServers`/`disabledMcpjsonServers` arrays)
-- **What**: Toggle switches for servers (ON/OFF)
+**Concept 2: Enable/Disable State** (Multiple Control Mechanisms)
+
+Controls for MCPJSON servers (`enabledMcpjsonServers`/`disabledMcpjsonServers` arrays):
+- **What**: Toggle switches for servers from `.mcp.json` files
 - **Where**: Can exist in settings files (`.claude/settings*.json`)
 - **Format**:
 ```json
 {
   "enabledMcpjsonServers": ["fetch", "time"],
-  "disabledMcpjsonServers": ["github"]
+  "disabledMcpjsonServers": ["github"],
+  "enableAllProjectMcpServers": true
 }
 ```
-- **Purpose**: Controls which defined servers are active
-- **Precedence**: Same hierarchy applies (local > project > user)
+- **Master Switch**: `enableAllProjectMcpServers` (true = enable all, false = disable all by default)
+- **Individual Override**: Individual enable/disable arrays override master switch
 - **CRITICAL LIMITATION**: These arrays ONLY work for servers defined in `.mcp.json` files
 - **Servers in `~/.claude.json`**: Always enabled, cannot be controlled via these arrays
 
+Controls for Direct servers (`disabledMcpServers` array):
+- **What**: Toggle switches for servers from `~/.claude.json` root `.mcpServers` or `.projects[cwd].mcpServers`
+- **Where**: ONLY in `~/.claude.json` (root OR `.projects[cwd]` section, NOT in settings files)
+- **Format**:
+```json
+{
+  "projects": {
+    "/path/to/project": {
+      "disabledMcpServers": ["time", "fetch"]
+    }
+  }
+}
+```
+- **Precedence**: `.projects[cwd]` section provides project-specific overrides
+- **Scope**: Project-specific control without moving server definition
+- **Tool behavior**: Writes to `.projects[cwd].disabledMcpServers` with automatic backup
+
+Controls for Plugin servers (`enabledPlugins` object):
+- **What**: Toggle switches for marketplace plugin servers
+- **Where**: ONLY in `.claude/settings*.json` files (NOT in `~/.claude.json`)
+- **Format**:
+```json
+{
+  "enabledPlugins": {
+    "mcp-fetch@claudecode-marketplace": true,
+    "mcp-time@claudecode-marketplace": false
+  }
+}
+```
+- **Precedence**: Project settings override user settings (objects merge)
+- **CRITICAL ISSUE**: Setting to `false` makes plugin disappear from UI entirely (user cannot re-enable without editing config)
+
 ### Server Types
 
-The tool categorizes servers into three types based on their source:
+The tool categorizes servers into four types based on their source:
 
 1. **MCPJSON Servers** (from `.mcp.json` files)
    - **Controllable**: Yes, via `enabledMcpjsonServers`/`disabledMcpjsonServers`
    - **Sources**: `~/.mcp.json` (user scope), `./.mcp.json` (project scope)
    - **UI Indicator**: `[ON]` or `[OFF]` with green/red color
+   - **Master Switch**: Can be bulk controlled via `enableAllProjectMcpServers` flag
 
 2. **Direct-Global Servers** (from `~/.claude.json` root `.mcpServers`)
-   - **Controllable**: No, always enabled
+   - **Controllable**: Yes, via `disabledMcpServers` array in `~/.claude.json` `.projects[cwd]` section
    - **Sources**: `~/.claude.json` root level `.mcpServers` object
-   - **UI Indicator**: `[⚠]` with yellow color, labeled "always-on"
-   - **Migration**: Can be migrated to `./.mcp.json` for project-level control
+   - **UI Indicator**: `[ON]` or `[OFF]` with indicator showing "direct-global"
+   - **Control Method**: Write to `~/.claude.json` `.projects[cwd].disabledMcpServers`
+   - **Alternative**: Can be migrated to `./.mcp.json` for full project ownership
+   - **Note**: `disabledMcpServers` can ONLY exist in `~/.claude.json`, NOT in settings files
 
 3. **Direct-Local Servers** (from `~/.claude.json` `.projects[cwd].mcpServers`)
-   - **Controllable**: No, always enabled
+   - **Controllable**: Yes, via `disabledMcpServers` array in same `.projects[cwd]` section
    - **Sources**: `~/.claude.json` `.projects[cwd].mcpServers` object
-   - **UI Indicator**: `[⚠]` with yellow color, labeled "always-on"
-   - **Migration**: Can be migrated to `./.mcp.json` for project-level control
+   - **UI Indicator**: `[ON]` or `[OFF]` with indicator showing "direct-local"
+   - **Control Method**: Write to `~/.claude.json` `.projects[cwd].disabledMcpServers`
+   - **Alternative**: Can be migrated to `./.mcp.json` for full project ownership
+
+4. **Plugin Servers** (from Claude Code Marketplace)
+   - **Controllable**: Yes, via `enabledPlugins` object
+   - **Sources**: `~/.claude/plugins/marketplaces/{MARKETPLACE}/.claude-plugin/marketplace.json`
+   - **UI Indicator**: `[ON]` or `[OFF]` with plugin badge
+   - **Control Location**: Only works in `.claude/settings*.json` files (NOT in `~/.claude.json`)
+   - **Critical Issue**: Setting to `false` makes plugin disappear from UI entirely (see Plugin Control section)
 
 ### Dual Precedence Resolution
 
@@ -267,23 +313,48 @@ Enabled In: ~/.claude/settings.json (user)
 Current Status: Enabled
 ```
 
-## Migration System
+## Direct Server Control System
 
-### Why Migration is Needed
+### Control Options for Direct Servers
 
-Servers defined in `~/.claude.json` (root `.mcpServers` or `.projects[cwd].mcpServers`) are **always enabled** by Claude Code. The `enabledMcpjsonServers`/`disabledMcpjsonServers` arrays are **ignored** for these servers.
+Direct servers (from `~/.claude.json`) have **two control methods**:
 
-To enable project-level control, the tool can migrate these servers to `./.mcp.json` (project scope).
+**Option A: Quick Disable** (Default, modifies global file)
+- Writes to `~/.claude.json` `.projects[cwd].disabledMcpServers`
+- Server definition stays in global config
+- Project-specific disable only
+- Quick, single-step process
+- Modifies global file but in project-scoped section
 
-### Migration Process
+**Option B: Migration** (Alternative, full project ownership)
+- Moves server definition to `./.mcp.json`
+- Controlled via `./.claude/settings.local.json`
+- Full project ownership of server
+- Multi-step process with validation
+- No global file modification after migration
 
-When user tries to disable a direct server (marked with `[⚠]`):
+### Quick Disable Process (Option A - Default)
 
-1. **Detection**: Tool detects server is a "direct" type (always enabled)
+When user toggles a direct server OFF:
+
+1. **Detection**: Tool detects server is "direct" type
+2. **Default Action**: Add server to `~/.claude.json` `.projects[cwd].disabledMcpServers`
+3. **Backup**: Automatic timestamped backup of `~/.claude.json` created
+4. **Write**: Atomic update to `.projects[cwd]` section
+5. **Validation**: Verify JSON integrity
+6. **Rollback**: Restore backup if any step fails
+
+**Result**: Server disabled for this project only, definition remains global
+
+### Migration Process (Option B - Alternative)
+
+When user chooses migration (via menu or keybinding):
+
+1. **Detection**: Tool detects server is "direct" type
 2. **Prompt**: User is shown migration options:
-   - `[y]` Migrate and disable (recommended)
+   - `[y]` Migrate to project (full ownership)
    - `[v]` View full server definition first
-   - `[n]` Keep enabled globally (cancel)
+   - `[n]` Cancel (use quick disable instead)
 3. **Backup**: Automatic timestamped backup of `~/.claude.json` created
 4. **Migration Steps** (if user confirms):
    - Extract server definition from `~/.claude.json`
@@ -292,8 +363,10 @@ When user tries to disable a direct server (marked with `[⚠]`):
    - Validate both JSON files
    - Mark server as migrated (prevents re-prompting)
    - Reload server list
-5. **Control**: Server is now controllable via enable/disable arrays
+5. **Control**: Server is now controllable via `disabledMcpjsonServers` in `./.claude/settings.local.json`
 6. **Rollback**: If any step fails, automatic rollback to backup
+
+**Result**: Project owns server definition, no global file dependency
 
 ### Migration Tracking
 
@@ -311,6 +384,97 @@ When user tries to disable a direct server (marked with `[⚠]`):
 - **Rollback on Failure**: Restores backup if any step fails
 - **Error Recovery**: Detailed error messages guide user
 
+## Plugin Control and Marketplace Integration
+
+### Plugin Server Discovery
+
+Plugin servers are discovered from marketplace installations:
+- **Location**: `~/.claude/plugins/marketplaces/{MARKETPLACE}/.claude-plugin/marketplace.json`
+- **Format**: Standard `mcpServers` object inside marketplace.json
+- **Naming**: Plugin servers identified by suffix `@{marketplace-name}` (e.g., `mcp-fetch@claudecode-marketplace`)
+
+### Plugin Control Mechanism
+
+**Control Object**: `enabledPlugins`
+```json
+{
+  "enabledPlugins": {
+    "mcp-fetch@claudecode-marketplace": true,
+    "mcp-time@claudecode-marketplace": false
+  }
+}
+```
+
+**Where it works**:
+- ✅ `./.claude/settings.local.json` (highest priority)
+- ✅ `./.claude/settings.json` (project scope)
+- ✅ `~/.claude/settings.json` (user scope)
+- ❌ `~/.claude.json` (any section) - Has NO effect
+- ❌ `~/.claude/settings.local.json` (user-local) - Has NO effect
+
+**Merge Behavior**: `enabledPlugins` objects MERGE across files
+- User settings: `{fetch: true, time: true}`
+- Project settings: `{fetch: false}`
+- Result: `{fetch: false, time: true}` (project overrides fetch, inherits time)
+
+### Critical Plugin UI Disappearance Issue
+
+**The Problem** (Confirmed via testing Oct 2025):
+
+When `enabledPlugins["plugin@marketplace"] = false` is set in working locations:
+- ❌ Plugin disappears completely from `claude mcp list`
+- ❌ Plugin becomes unavailable in Claude Code UI
+- ❌ User cannot re-enable it via UI during session
+- ❌ Config file edit required to restore
+
+**Workaround Approaches**:
+
+1. **Omit Instead of Setting False** (Recommended for soft disable):
+```json
+{
+  "enabledPlugins": {
+    "mcp-time@claudecode-marketplace": true
+    // Don't mention mcp-fetch - inherits from lower-priority config
+  }
+}
+```
+- ✅ Allows re-enabling via Claude UI
+- ⚠️ Lower-priority configs may still enable it
+- ⚠️ Less predictable behavior
+
+2. **Set to False** (For hard disable):
+```json
+{
+  "enabledPlugins": {
+    "mcp-fetch@claudecode-marketplace": false
+  }
+}
+```
+- ✅ Completely prevents plugin use
+- ❌ Plugin disappears from UI
+- ❌ Cannot re-enable without config edit
+
+**Tool Implementation Decision**:
+- For plugins, tool will use **omit strategy** by default
+- User can explicitly request "hard disable" via special command
+- Preview will warn about UI disappearance if hard-disabling
+
+### Tested Control Arrays (Oct 2025)
+
+**Working Arrays**:
+- ✅ `enabledMcpjsonServers` / `disabledMcpjsonServers` - Controls .mcp.json servers (in settings files)
+- ✅ `disabledMcpServers` - Controls Direct-Global/Direct-Local servers (ONLY in `~/.claude.json`)
+- ✅ `enabledPlugins` - Controls marketplace plugins (in settings files only)
+- ✅ `enableAllProjectMcpServers` - Master switch for all .mcp.json servers
+
+**Critical Location Restrictions**:
+- ❌ `disabledMcpServers` CANNOT be in settings files (`.claude/settings*.json`)
+- ❌ `disabledMcpServers` ONLY works in `~/.claude.json` (root or `.projects[cwd]`)
+- ✅ `disabledMcpjsonServers` ONLY works in settings files
+- ✅ Tool writes `disabledMcpServers` to `.projects[cwd]` section for project-specific control
+
+**Testing Reference**: See `MCP_CONTROL_TESTING_REPORT.md` for comprehensive test evidence and precedence rules.
+
 ## Important Notes
 
 - **CAN modify global config** - ONLY when user explicitly requests migration
@@ -324,6 +488,7 @@ When user tries to disable a direct server (marked with `[⚠]`):
 - Preview window updates on every toggle/change and shows migration instructions for direct servers
 - Exit code 130 from `fzf` = user cancelled (ESC/Ctrl-C)
 - Creates `.claude/` directory automatically if needed
+- **Plugin control**: Uses omit strategy by default to avoid UI disappearance
 
 ## New Project Flow
 
