@@ -173,13 +173,17 @@ extract_server_name() {
     local raw_input="$1"
     echo "$raw_input" | \
         sed 's/\x1b\[[0-9;]*m//g' | \
+        sed 's/^● *//' | \
+        sed 's/^○ *//' | \
+        sed 's/^⚠ *//' | \
         sed 's/^\[ON \] *//' | \
         sed 's/^\[OFF\] *//' | \
         sed 's/^\[⚠ \] *//' | \
         sed 's/^     *//' | \
         sed 's/ *\[plugin\] *//' | \
         sed 's/ *\[direct\] *//' | \
-        sed 's/ *(.*)$//'
+        sed 's/ *│.*//' | \
+        awk '{print $1}'
 }
 
 # ============================================================================
@@ -1429,7 +1433,7 @@ write_direct_servers_to_claude_json() {
 # ============================================================================
 
 # Generate fzf list from state file
-# Output format: "[ON ] server-name (scope, type)" or "[⚠ ] server-name (scope, always-on)"
+# Output format: "● server-name  │  type  │  scope" with columnar alignment
 generate_fzf_list() {
     if [[ ! -f "$STATE_FILE" ]] || [[ ! -s "$STATE_FILE" ]]; then
         echo ""
@@ -1441,34 +1445,41 @@ generate_fzf_list() {
     while IFS=: read -r state server scope file source_type; do
         [[ -z "$server" ]] && continue
 
-        # Direct servers: Show as ON/OFF with [direct] badge
-        if [[ "$source_type" == "direct-global" ]] || [[ "$source_type" == "direct-local" ]]; then
-            local badge="${COLOR_YELLOW}[direct]${COLOR_RESET}"
-            if [[ "$state" == "on" ]]; then
-                echo -e "${COLOR_GREEN}[ON ]${COLOR_RESET} $server ${badge} ${dim}($scope, $source_type)${COLOR_RESET}"
-            else
-                echo -e "${COLOR_RED}[OFF]${COLOR_RESET} $server ${badge} ${dim}($scope, $source_type)${COLOR_RESET}"
-            fi
-            continue
-        fi
-
-        # Plugin servers: Show with badge
-        if [[ "$source_type" == "plugin" ]]; then
-            local badge="${COLOR_BLUE}[plugin]${COLOR_RESET}"
-            if [[ "$state" == "on" ]]; then
-                echo -e "${COLOR_GREEN}[ON ]${COLOR_RESET} $server ${badge} ${dim}($scope)${COLOR_RESET}"
-            else
-                echo -e "${COLOR_RED}[OFF]${COLOR_RESET} $server ${badge} ${dim}($scope)${COLOR_RESET}"
-            fi
-            continue
-        fi
-
-        # MCPJSON servers (existing logic)
+        # Determine state symbol and color
+        local symbol=""
+        local symbol_color=""
         if [[ "$state" == "on" ]]; then
-            echo -e "${COLOR_GREEN}[ON ]${COLOR_RESET} $server ${dim}($scope, $source_type)${COLOR_RESET}"
-        elif [[ "$state" == "off" ]]; then
-            echo -e "${COLOR_RED}[OFF]${COLOR_RESET} $server ${dim}($scope, $source_type)${COLOR_RESET}"
+            symbol="●"
+            symbol_color="${COLOR_GREEN}"
+        else
+            symbol="○"
+            symbol_color="${COLOR_RED}"
         fi
+
+        # Determine type label with color
+        local type_label=""
+        local type_color=""
+        if [[ "$source_type" == "direct-global" ]] || [[ "$source_type" == "direct-local" ]]; then
+            type_label="direct"
+            type_color="${COLOR_YELLOW}"
+        elif [[ "$source_type" == "plugin" ]]; then
+            type_label="plugin"
+            type_color="${COLOR_BLUE}"
+        else
+            type_label="mcpjson"
+            type_color="${COLOR_CYAN}"
+        fi
+
+        # Format with columnar alignment (symbol + name + type + scope)
+        # Using fixed-width padding for clean columns
+        printf "%b%-3s%b %-30s %b│%b  %-10s %b│%b  %s%b\n" \
+            "$symbol_color" "$symbol" "${COLOR_RESET}" \
+            "$server" \
+            "${dim}" "${COLOR_RESET}" \
+            "$type_label" \
+            "${dim}" "${COLOR_RESET}" \
+            "$scope" \
+            "${COLOR_RESET}"
     done < "$STATE_FILE"
 }
 
@@ -1526,128 +1537,143 @@ generate_preview() {
         fi
     done <<< "$all_sources"
 
-    # Header with separator (fixed width for preview)
-    local preview_line=$(gen_line "─" 40)
-    echo "$preview_line"
-    echo -e " ${COLOR_WHITE}$server${COLOR_RESET}"
-    echo "$preview_line"
-    echo ""
+    # Header with box-drawing border (fixed width for preview)
+    local preview_width=45
+    local title_len=${#server}
+    local pad_total=$((preview_width - title_len - 4))
+    local pad_left=$((pad_total / 2))
+    local pad_right=$((pad_total - pad_left))
+
+    echo -n "┌─"
+    printf '%*s' $pad_left | tr ' ' '─'
+    echo -n " ${server} "
+    printf '%*s' $pad_right | tr ' ' '─'
+    echo "─┐"
+    echo "│"
 
     # NEW: Direct server preview
     if [[ "$source_type" == "direct-global" ]] || [[ "$source_type" == "direct-local" ]]; then
         # Source type
-        echo -e "${COLOR_CYAN}Source Type${COLOR_RESET}"
+        echo -e "│ ${COLOR_CYAN}── Source Type ──${COLOR_RESET}"
         if [[ "$source_type" == "direct-global" ]]; then
-            echo -e "  ${COLOR_YELLOW}Direct (global)${COLOR_RESET}"
+            echo -e "│   ${COLOR_YELLOW}Direct (global)${COLOR_RESET}"
         else
-            echo -e "  ${COLOR_YELLOW}Direct (local)${COLOR_RESET}"
+            echo -e "│   ${COLOR_YELLOW}Direct (local)${COLOR_RESET}"
         fi
-        echo ""
+        echo "│"
 
         # Definition source
-        echo -e "${COLOR_CYAN}Definition${COLOR_RESET}"
-        echo -e "  Scope: $def_scope"
-        echo -e "  File:  $(abbreviate_path "$def_file")"
-        echo ""
+        echo -e "│ ${COLOR_CYAN}── Definition ──${COLOR_RESET}"
+        echo -e "│   Scope: $def_scope"
+        echo -e "│   File:  $(abbreviate_path "$def_file")"
+        echo "│"
 
         # Status and control method
-        echo -e "${COLOR_CYAN}Status & Control${COLOR_RESET}"
+        echo -e "│ ${COLOR_CYAN}── Status & Control ──${COLOR_RESET}"
         if [[ "$current_state" == "off" ]]; then
-            echo -e "  ${COLOR_RED}Disabled${COLOR_RESET} (quick-disable)"
-            echo -e "  • Disabled via ${COLOR_CYAN}$(abbreviate_path "$HOME/.claude.json")${COLOR_RESET}"
-            echo -e "  • Location: ${COLOR_CYAN}.projects[cwd].disabledMcpServers${COLOR_RESET}"
-            echo -e "  • Definition remains global"
-            echo ""
-            echo -e "Press ${COLOR_CYAN}SPACE${COLOR_RESET} to re-enable"
-            echo -e "Press ${COLOR_CYAN}ALT-M${COLOR_RESET} to migrate to project"
+            echo -e "│   ${COLOR_RED}● Disabled${COLOR_RESET} (quick-disable)"
+            echo -e "│   • Disabled via ${COLOR_CYAN}$(abbreviate_path "$HOME/.claude.json")${COLOR_RESET}"
+            echo -e "│   • Location: ${COLOR_CYAN}.projects[cwd].disabledMcpServers${COLOR_RESET}"
+            echo -e "│   • Definition remains global"
+            echo "│"
+            echo -e "│ ${COLOR_CYAN}Press SPACE to re-enable${COLOR_RESET}"
+            echo -e "│ ${COLOR_CYAN}Press ALT-M to migrate to project${COLOR_RESET}"
         else
-            echo -e "  ${COLOR_GREEN}Enabled${COLOR_RESET}"
-            echo -e "  • Definition in: ${COLOR_CYAN}$(abbreviate_path "$def_file")${COLOR_RESET}"
-            echo ""
-            echo -e "Press ${COLOR_CYAN}SPACE${COLOR_RESET} to quick-disable"
-            echo -e "Press ${COLOR_CYAN}ALT-M${COLOR_RESET} to migrate to project"
+            echo -e "│   ${COLOR_GREEN}● Enabled${COLOR_RESET}"
+            echo -e "│   • Definition in: ${COLOR_CYAN}$(abbreviate_path "$def_file")${COLOR_RESET}"
+            echo "│"
+            echo -e "│ ${COLOR_CYAN}Press SPACE to quick-disable${COLOR_RESET}"
+            echo -e "│ ${COLOR_CYAN}Press ALT-M to migrate to project${COLOR_RESET}"
         fi
 
-        echo ""
-        echo "$preview_line"
-        echo -e "${COLOR_WHITE}Quick Disable${COLOR_RESET} - Fast, modifies ~/.claude.json .projects[cwd]"
-        echo -e "${COLOR_WHITE}Migration (ALT-M)${COLOR_RESET} - Full ownership, project-local"
+        echo "│"
+        echo "├─────────────────────────────────────────────┤"
+        echo -e "│ ${COLOR_WHITE}Quick Disable${COLOR_RESET} - Fast, modifies"
+        echo "│   ~/.claude.json .projects[cwd]"
+        echo -e "│ ${COLOR_WHITE}Migration (ALT-M)${COLOR_RESET} - Full ownership,"
+        echo "│   project-local"
+        echo "└─────────────────────────────────────────────┘"
         return
     fi
 
     # Plugin server preview
     if [[ "$source_type" == "plugin" ]]; then
         # Source type
-        echo -e "${COLOR_CYAN}Source Type${COLOR_RESET}"
-        echo -e "  ${COLOR_BLUE}Marketplace Plugin${COLOR_RESET}"
-        echo ""
+        echo -e "│ ${COLOR_CYAN}── Source Type ──${COLOR_RESET}"
+        echo -e "│   ${COLOR_BLUE}Marketplace Plugin${COLOR_RESET}"
+        echo "│"
 
         # Definition source
-        echo -e "${COLOR_CYAN}Definition${COLOR_RESET}"
-        echo -e "  Scope: $def_scope"
-        echo -e "  File:  $(abbreviate_path "$def_file")"
-        echo ""
+        echo -e "│ ${COLOR_CYAN}── Definition ──${COLOR_RESET}"
+        echo -e "│   Scope: $def_scope"
+        echo -e "│   File:  $(abbreviate_path "$def_file")"
+        echo "│"
 
         # Status and control source
-        echo -e "${COLOR_CYAN}Status & Control${COLOR_RESET}"
+        echo -e "│ ${COLOR_CYAN}── Status & Control ──${COLOR_RESET}"
         if [[ "$current_state" == "off" ]]; then
-            echo -e "  ${COLOR_RED}Disabled${COLOR_RESET}"
+            echo -e "│   ${COLOR_RED}● Disabled${COLOR_RESET}"
             if [[ -n "$state_scope" ]]; then
-                echo -e "  • State from: ${COLOR_CYAN}$(abbreviate_path "$state_file")${COLOR_RESET} ($state_scope)"
+                echo -e "│   • State from: ${COLOR_CYAN}$(abbreviate_path "$state_file")${COLOR_RESET}"
+                echo "│     ($state_scope)"
             fi
-            echo -e "  • Controlled via ${COLOR_CYAN}enabledPlugins${COLOR_RESET}"
-            echo -e "  • Hidden from Claude MCP menu when disabled"
-            echo ""
-            echo -e "Press ${COLOR_CYAN}SPACE${COLOR_RESET} to enable"
+            echo -e "│   • Controlled via ${COLOR_CYAN}enabledPlugins${COLOR_RESET}"
+            echo "│   • Hidden from Claude MCP menu when disabled"
+            echo "│"
+            echo -e "│ ${COLOR_CYAN}Press SPACE to enable${COLOR_RESET}"
         else
-            echo -e "  ${COLOR_GREEN}Enabled${COLOR_RESET}"
+            echo -e "│   ${COLOR_GREEN}● Enabled${COLOR_RESET}"
             if [[ -n "$state_scope" ]]; then
-                echo -e "  • State from: ${COLOR_CYAN}$(abbreviate_path "$state_file")${COLOR_RESET} ($state_scope)"
+                echo -e "│   • State from: ${COLOR_CYAN}$(abbreviate_path "$state_file")${COLOR_RESET}"
+                echo "│     ($state_scope)"
             fi
-            echo -e "  • Controlled via ${COLOR_CYAN}enabledPlugins${COLOR_RESET}"
-            echo ""
-            echo -e "Press ${COLOR_CYAN}SPACE${COLOR_RESET} to disable (hides from Claude)"
+            echo -e "│   • Controlled via ${COLOR_CYAN}enabledPlugins${COLOR_RESET}"
+            echo "│"
+            echo -e "│ ${COLOR_CYAN}Press SPACE to disable (hides from Claude)${COLOR_RESET}"
         fi
 
-        echo ""
-        echo "$preview_line"
-        echo -e "${COLOR_YELLOW}Note:${COLOR_RESET} To delete this plugin permanently,"
-        echo "use the Claude MCP menu (not this tool)."
-        echo "$preview_line"
-        echo ""
-        echo -e "Changes write to:"
-        echo "  ./.claude/settings.local.json (enabledPlugins)"
+        echo "│"
+        echo "├─────────────────────────────────────────────┤"
+        echo -e "│ ${COLOR_YELLOW}Note:${COLOR_RESET} To delete this plugin permanently,"
+        echo "│ use the Claude MCP menu (not this tool)."
+        echo "├─────────────────────────────────────────────┤"
+        echo "│ Changes write to:"
+        echo "│   ./.claude/settings.local.json"
+        echo "│   (enabledPlugins)"
+        echo "└─────────────────────────────────────────────┘"
         return
     fi
 
     # MCPJSON server preview
     # Source type
-    echo -e "${COLOR_CYAN}Source Type${COLOR_RESET}"
-    echo -e "  ${COLOR_GREEN}MCP.json${COLOR_RESET} (controllable)"
-    echo ""
+    echo -e "│ ${COLOR_CYAN}── Source Type ──${COLOR_RESET}"
+    echo -e "│   ${COLOR_GREEN}MCP.json${COLOR_RESET} (controllable)"
+    echo "│"
 
     # Definition source
-    echo -e "${COLOR_CYAN}Definition${COLOR_RESET}"
-    echo -e "  Scope: $def_scope"
-    echo -e "  File:  $def_file"
-    echo ""
+    echo -e "│ ${COLOR_CYAN}── Definition ──${COLOR_RESET}"
+    echo -e "│   Scope: $def_scope"
+    echo -e "│   File:  $def_file"
+    echo "│"
 
     # Status
-    echo -e "${COLOR_CYAN}Status${COLOR_RESET}"
+    echo -e "│ ${COLOR_CYAN}── Status ──${COLOR_RESET}"
     if [[ "$current_state" == "on" ]]; then
-        echo -e "  ${COLOR_GREEN}Enabled${COLOR_RESET}"
+        echo -e "│   ${COLOR_GREEN}● Enabled${COLOR_RESET}"
     else
-        echo -e "  ${COLOR_RED}Disabled${COLOR_RESET}"
+        echo -e "│   ${COLOR_RED}● Disabled${COLOR_RESET}"
     fi
-    echo ""
+    echo "│"
+
+    # Action hint
+    echo -e "│ ${COLOR_CYAN}Press SPACE to toggle${COLOR_RESET}"
+    echo "│"
 
     # Write target
-    echo "$preview_line"
-    echo -e "${COLOR_YELLOW}Changes write to:${COLOR_RESET}"
-    echo "  ./.claude/settings.local.json"
-    echo "$preview_line"
-    echo ""
-    echo -e "Press ${COLOR_CYAN}SPACE${COLOR_RESET} to toggle"
+    echo "├─────────────────────────────────────────────┤"
+    echo -e "│ ${COLOR_YELLOW}Changes write to:${COLOR_RESET}"
+    echo "│   ./.claude/settings.local.json"
+    echo "└─────────────────────────────────────────────┘"
 }
 
 # ============================================================================
@@ -1797,29 +1823,25 @@ launch_fzf_tui() {
     local term_width=$(get_term_width)
     local title_line=$(gen_line "═" $term_width)
 
-    # Display header outside the fzf box
+    # Display header outside the fzf box - Retro Terminal Elegance Design
     echo -e "${COLOR_GREEN}${title_line}${COLOR_RESET}"
-    echo -e "${COLOR_WHITE}  🔧 MCP SERVER SELECTOR v${VERSION}${COLOR_RESET} ${COLOR_GREEN}- Manage Claude Code MCP Servers${COLOR_RESET}"
+    echo -e "  ${COLOR_WHITE}⚡ MCP SERVER SELECTOR${COLOR_RESET}  ${COLOR_CYAN}v${VERSION}${COLOR_RESET}"
     echo -e "${COLOR_GREEN}${title_line}${COLOR_RESET}"
-    echo ""
-    echo -e "${COLOR_CYAN}Write Target  :${COLOR_RESET} ./.claude/settings.local.json"
-    echo -e "${COLOR_CYAN}Controllable  :${COLOR_RESET} Servers from .mcp.json files"
-    echo -e "${COLOR_CYAN}Migration     :${COLOR_RESET} Direct servers (from ~/.claude.json) can be migrated"
-    echo ""
-    echo -e "${COLOR_WHITE}Total: ${COLOR_RESET}${total_count}  ${COLOR_WHITE}│${COLOR_RESET}  ${COLOR_GREEN}Enabled: ${COLOR_RESET}${enabled_count}  ${COLOR_WHITE}│${COLOR_RESET}  ${COLOR_BLUE}Local: ${COLOR_RESET}${local_count}  ${COLOR_WHITE}│${COLOR_RESET}  ${COLOR_BLUE}Project: ${COLOR_RESET}${project_count}  ${COLOR_WHITE}│${COLOR_RESET}  ${COLOR_BLUE}User: ${COLOR_RESET}${user_count}"
     echo ""
 
-    # Shortcuts header inside fzf with color hierarchy
-    local shortcuts_line=$(gen_line "─" 52)
-    local header
-    # Use printf to properly interpret escape sequences
-    printf -v header "%b" "${shortcuts_line}
-${COLOR_WHITE}Shortcuts:${COLOR_RESET}
-${COLOR_CYAN}│${COLOR_RESET} ${COLOR_WHITE}[SPACE]${COLOR_RESET}     Toggle       ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[ENTER]${COLOR_RESET} Save & Exit
-${COLOR_CYAN}│${COLOR_RESET} ${COLOR_WHITE}[ALT-M]${COLOR_RESET}     Migrate      ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[CTRL-A]${COLOR_RESET} Add Server
-${COLOR_CYAN}│${COLOR_RESET} ${COLOR_WHITE}[CTRL-X]${COLOR_RESET}    Remove       ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[ALT-E]${COLOR_RESET} Enable All
-${COLOR_CYAN}│${COLOR_RESET} ${COLOR_WHITE}[ALT-D]${COLOR_RESET}     Disable All  ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[ESC]${COLOR_RESET} Cancel
-${shortcuts_line}"
+    # Calculate percentages
+    local enabled_pct=0
+    if [[ $total_count -gt 0 ]]; then
+        enabled_pct=$((enabled_count * 100 / total_count))
+    fi
+
+    # Compact info bar with write target
+    echo -e "${COLOR_CYAN}Write →${COLOR_RESET} ./.claude/settings.local.json  ${COLOR_WHITE}│${COLOR_RESET}  ${COLOR_GREEN}Enabled: ${enabled_count}/${total_count} (${enabled_pct}%)${COLOR_RESET}"
+    echo ""
+
+    # Compact shortcuts moved to fzf footer (single line status bar)
+    local header=""
+    header="${COLOR_CYAN}[SPACE]${COLOR_RESET} Toggle  ${COLOR_CYAN}[ALT-M]${COLOR_RESET} Migrate  ${COLOR_CYAN}[CTRL-A]${COLOR_RESET} Add  ${COLOR_CYAN}[CTRL-X]${COLOR_RESET} Del  ${COLOR_CYAN}[ALT-E]${COLOR_RESET} Enable All  ${COLOR_CYAN}[ALT-D]${COLOR_RESET} Disable All  ${COLOR_CYAN}[↵]${COLOR_RESET} Save  ${COLOR_CYAN}[ESC]${COLOR_RESET} Cancel"
 
     # Run fzf with dynamic bindings
     set +e  # Don't exit on fzf cancel
@@ -1831,8 +1853,9 @@ ${shortcuts_line}"
         --height=80% \
         --border=rounded \
         --prompt="Filter: " \
-        --pointer="▶" \
-        --marker="→" \
+        --pointer="►" \
+        --marker="●" \
+        --info=inline \
         --header="$header" \
         --preview="generate_preview {}" \
         --preview-window="right:45%:wrap" \
