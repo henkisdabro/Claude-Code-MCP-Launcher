@@ -74,13 +74,14 @@ The tool will:
 
 | Key | Action |
 |-----|--------|
-| `SPACE` | Toggle server on/off (or trigger migration for always-on servers) |
+| `SPACE` | Toggle server on/off (quick-disable for Direct servers) |
+| `ALT-M` | Migrate Direct server to project (full ownership) |
 | `ENTER` | Save changes and launch Claude |
 | `ESC` | Cancel without saving |
-| `Ctrl-A` | Add new server |
-| `Ctrl-X` | Remove selected server |
-| `Alt-E` | Enable all servers |
-| `Alt-D` | Disable all servers |
+| `CTRL-A` | Add new server |
+| `CTRL-X` | Remove selected server |
+| `ALT-E` | Enable all servers |
+| `ALT-D` | Disable all servers |
 | `↑/↓` or `/` | Navigate and filter |
 
 ### UI Indicators
@@ -89,15 +90,19 @@ The TUI shows server status with color-coded indicators:
 
 | Indicator | Meaning | Source Type | Controllable? |
 |-----------|---------|-------------|---------------|
-| `[ON ]` (green) | Server enabled | MCPJSON (from `.mcp.json`) | ✅ Yes |
-| `[OFF]` (red) | Server disabled | MCPJSON (from `.mcp.json`) | ✅ Yes |
-| `[⚠ ]` (yellow) | Always enabled | Direct (from `~/.claude.json`) | ⚠️ Requires migration |
+| `[ON ]` (green) | Server enabled | MCPJSON (from `.mcp.json`) | ✅ Yes (SPACE) |
+| `[OFF]` (red) | Server disabled | MCPJSON (from `.mcp.json`) | ✅ Yes (SPACE) |
+| `[ON ]` (green) | Server enabled | Direct-Global (from `~/.claude.json`) | ✅ Yes (SPACE for quick-disable) |
+| `[OFF]` (red) | Server disabled | Direct-Global (from `~/.claude.json`) | ✅ Yes (SPACE to re-enable) |
+| `[ON ]` (green) | Server enabled | Direct-Local (from `~/.claude.json` project) | ✅ Yes (SPACE for quick-disable) |
+| `[OFF]` (red) | Server disabled | Direct-Local (from `~/.claude.json` project) | ✅ Yes (SPACE to re-enable) |
 
 **Scope labels** show where the server is defined:
-- `(local, mcpjson)` - Project-local, controllable
-- `(project, mcpjson)` - Project-shared, controllable
-- `(user, mcpjson)` - User-global, controllable
-- `(user, always-on)` - User-global, requires migration
+- `(local, mcpjson)` - Project-local, controllable via settings
+- `(project, mcpjson)` - Project-shared, controllable via settings
+- `(user, mcpjson)` - User-global, controllable via settings
+- `(user, direct-global)` - User-global, quick-disable or migrate
+- `(local, direct-local)` - Project-specific in `~/.claude.json`, quick-disable or migrate
 - `(local, always-on)` - Project-specific in global config, requires migration
 
 ## Recommended Workflow
@@ -115,25 +120,40 @@ This workflow ensures Claude's context is focused on your code and task, not fil
 
 ## Best Practices
 
+### Direct Server Control Options
+
+Servers defined in `~/.claude.json` (Direct servers) have **two control methods**:
+
+**Option A: Quick-Disable (Default)**
+- Press `SPACE` to toggle server on/off
+- Writes to `~/.claude.json` `.projects[cwd].disabledMcpServers`
+- Server definition stays global, but disabled for this project
+- Fast, single-step process
+- **Best for:** Temporary disables, quick testing
+
+**Option B: Migration (Alternative)**
+- Press `ALT-M` to migrate server to project
+- Moves definition to `./.mcp.json` for full project ownership
+- Requires confirmation and creates automatic backup
+- **Best for:** Permanent project-specific control
+
 ### Organize Your Server Definitions
 
-**Move servers to `.mcp.json` files for maximum control:**
+**Recommended server locations:**
 
 1. **Audit servers in** `~/.claude.json`:
    ```bash
    jq '.mcpServers | keys' ~/.claude.json
    ```
 
-2. **Migrate to controllable format:**
-   - Run `mcp` in any project
-   - Look for servers marked with `[⚠]` (yellow, always-on)
-   - Press `SPACE` on any always-on server to trigger migration
-   - Tool will automatically move it to `./.mcp.json` with backup
+2. **Choose control method for Direct servers:**
+   - **Quick-disable:** Use `SPACE` to disable for current project
+   - **Migrate:** Use `ALT-M` to move to `./.mcp.json` for full ownership
 
 3. **Define new servers in** `.mcp.json` files:
    - User-global servers → `~/.mcp.json`
    - Project-specific servers → `./.mcp.json`
-   - Never add to `~/.claude.json` (they become always-on)
+   - Avoid adding to `~/.claude.json` (use .mcp.json for easier control)
 
 ### Minimize Default Enabled Servers
 
@@ -172,6 +192,49 @@ This ensures:
 - Team members have consistent server availability
 - Individual developers can optimize their own context
 - No conflicts from personal preferences
+
+## Configuration Precedence
+
+Understanding how Claude Code resolves configuration from multiple sources:
+
+### Control Array Effectiveness
+
+Control arrays only work in specific locations:
+
+| Control Array | ✅ Valid Locations | ❌ Invalid Locations | Purpose |
+|---------------|-------------------|---------------------|---------|
+| `enabledMcpjsonServers` | `.claude/settings*.json` | `~/.claude.json` | Enable .mcp.json servers |
+| `disabledMcpjsonServers` | `.claude/settings*.json` | `~/.claude.json` | Disable .mcp.json servers |
+| `disabledMcpServers` | `~/.claude.json` only | `.claude/settings*.json` | Disable Direct servers |
+| `enabledPlugins` | `.claude/settings*.json` | `~/.claude.json` | Control marketplace plugins |
+
+### Scope Precedence (Highest to Lowest)
+
+| Priority | Scope | Files | Overrides |
+|----------|-------|-------|-----------|
+| **3** (Highest) | **Local** | `./.claude/settings.local.json` | Everything |
+| **2** | **Project** | `./.claude/settings.json` | User settings |
+| **1** (Lowest) | **User** | `~/.claude/settings*.json` | Nothing |
+
+**Special**: `disabledMcpServers` in `~/.claude.json`:
+- Root level = user scope (priority 1)
+- `.projects[cwd]` = local scope (priority 3, overrides root)
+
+### Examples
+
+**Example 1: MCPJSON Server Control**
+```
+User:    fetch enabled in ~/.claude/settings.json
+Project: fetch disabled in ./.claude/settings.json
+Result:  DISABLED (project wins)
+```
+
+**Example 2: Direct Server Quick-Disable**
+```
+Global:  time defined in ~/.claude.json .mcpServers
+Project: time disabled in ~/.claude.json .projects[cwd].disabledMcpServers
+Result:  DISABLED for this project, enabled globally elsewhere
+```
 
 ## Installation
 

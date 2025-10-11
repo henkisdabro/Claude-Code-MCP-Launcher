@@ -2,3 +2,4 @@
 *.local.json
 .mcp.json
 marketing/
+.env

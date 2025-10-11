@@ -108,6 +108,80 @@ gen_line() {
     printf '%*s' "$width" | tr ' ' "$char"
 }
 
+# Abbreviate path in fish-shell style
+# Args: $1 - path to abbreviate
+# Returns: abbreviated path (e.g., ~/.c/s.local.json)
+abbreviate_path() {
+    local path="$1"
+
+    # Replace home directory with ~
+    path="${path/#$HOME/\~}"
+
+    # If path is in current directory, show as relative
+    # Use exported MCP_CURRENT_DIR if available (for fzf preview context)
+    local cwd="${MCP_CURRENT_DIR:-$(pwd)}"
+    if [[ "$path" == "$cwd/"* ]]; then
+        path="./${path#$cwd/}"
+    elif [[ "$path" == "$cwd" ]]; then
+        path="."
+    fi
+
+    # Abbreviate directory names (keep first letter only for non-terminal dirs)
+    # Only abbreviate paths with 4+ components for readability
+    local IFS='/'
+    local -a parts=($path)
+    local num_parts=${#parts[@]}
+    local last_idx=$((num_parts - 1))
+
+    # If path has fewer than 4 components, don't abbreviate (keeps it readable)
+    if [[ $num_parts -lt 4 ]]; then
+        echo "$path"
+        return
+    fi
+
+    local result=""
+    for i in "${!parts[@]}"; do
+        local part="${parts[$i]}"
+
+        # Skip empty components
+        if [[ -z "$part" ]]; then
+            continue
+        fi
+
+        # Keep special prefixes as-is (~, ., ..)
+        if [[ "$part" == "~" ]] || [[ "$part" == "." ]] || [[ "$part" == ".." ]]; then
+            result+="$part"
+        elif [[ $i -eq $last_idx ]]; then
+            # Last component - keep full name
+            result+="/$part"
+        else
+            # Intermediate directory - abbreviate to first letter
+            result+="/${part:0:1}"
+        fi
+    done
+
+    # Clean up leading slash if path starts with ~ or .
+    result="${result#/}"
+
+    echo "$result"
+}
+
+# Extract clean server name from fzf selection
+# Args: $1 - raw input from fzf (with ANSI codes, prefixes, badges, scope)
+# Returns: clean server name
+extract_server_name() {
+    local raw_input="$1"
+    echo "$raw_input" | \
+        sed 's/\x1b\[[0-9;]*m//g' | \
+        sed 's/^\[ON \] *//' | \
+        sed 's/^\[OFF\] *//' | \
+        sed 's/^\[⚠ \] *//' | \
+        sed 's/^     *//' | \
+        sed 's/ *\[plugin\] *//' | \
+        sed 's/ *\[direct\] *//' | \
+        sed 's/ *(.*)$//'
+}
+
 # ============================================================================
 # DEPENDENCY CHECKING
 # ============================================================================
@@ -354,6 +428,81 @@ parse_claude_json_file() {
     fi
 }
 
+# Parse enabledPlugins from settings files
+# Args: $1 - file path, $2 - scope label (local/project/user)
+# Output: Lines in format "type:plugin_server:scope:file"
+# Types: enable (plugin enabled), disable (plugin disabled)
+# Example: enable:mcp-fetch@claudecode-marketplace:user:~/.claude/settings.json
+parse_enabled_plugins() {
+    local file="$1"
+    local scope="$2"
+
+    if [[ ! -f "$file" ]] || ! jq empty "$file" 2>/dev/null; then
+        return 0
+    fi
+
+    # Extract enabledPlugins object
+    local plugins_json
+    plugins_json=$(jq -r '.enabledPlugins // {}' "$file" 2>/dev/null)
+
+    if [[ "$plugins_json" == "{}" ]]; then
+        return 0
+    fi
+
+    # Parse each plugin: server -> enabled state
+    echo "$plugins_json" | jq -r 'to_entries[] | "\(.key):\(.value)"' | while IFS=: read -r plugin_name enabled_state; do
+        [[ -z "$plugin_name" ]] && continue
+
+        if [[ "$enabled_state" == "true" ]]; then
+            echo "enable:$plugin_name:$scope:$file"
+        else
+            echo "disable:$plugin_name:$scope:$file"
+        fi
+    done
+}
+
+# Discover plugin servers from marketplace installations
+# Output: Lines in format "def:server:scope:file:plugin"
+# Example: def:mcp-fetch@claudecode-marketplace:user:~/.claude/plugins/marketplaces/claudecode-marketplace/.claude-plugin/marketplace.json:plugin
+parse_plugin_marketplace_files() {
+    local marketplace_dir="$HOME/.claude/plugins/marketplaces"
+
+    if [[ ! -d "$marketplace_dir" ]]; then
+        return 0
+    fi
+
+    # Find all marketplace.json files
+    while IFS= read -r marketplace_file; do
+        [[ ! -f "$marketplace_file" ]] && continue
+        [[ ! -s "$marketplace_file" ]] && continue
+
+        # Validate JSON
+        if ! jq empty "$marketplace_file" 2>/dev/null; then
+            continue
+        fi
+
+        # Extract marketplace name from path
+        # Path: ~/.claude/plugins/marketplaces/claudecode-marketplace/.claude-plugin/marketplace.json
+        local marketplace_name
+        marketplace_name=$(echo "$marketplace_file" | sed 's|.*/marketplaces/\([^/]*\)/.*|\1|')
+
+        # Extract plugin names from plugins array where category == "mcpServers"
+        # Use the plugin .name field (e.g., "mcp-fetch") not the mcpServers keys
+        # This matches the format used in enabledPlugins
+        local plugins
+        plugins=$(jq -r '.plugins[]? | select(.category == "mcpServers") | .name // empty' "$marketplace_file" 2>/dev/null | sort -u)
+
+        if [[ -n "$plugins" ]]; then
+            while IFS= read -r plugin_name; do
+                [[ -z "$plugin_name" ]] && continue
+                # Append marketplace name to plugin for unique identification
+                local plugin_server="${plugin_name}@${marketplace_name}"
+                echo "def:$plugin_server:user:$marketplace_file:plugin"
+            done <<< "$plugins"
+        fi
+    done < <(find "$marketplace_dir" -name "marketplace.json" 2>/dev/null)
+}
+
 # ============================================================================
 # CONFIGURATION DISCOVERY & NEW PROJECT FLOW
 # ============================================================================
@@ -484,6 +633,20 @@ discover_and_parse_all_sources() {
 
     # Local scope (highest priority)
     parse_settings_file "./.claude/settings.local.json" "local" >> "$temp_raw"
+
+    # Parse plugin servers from marketplace installations
+    parse_plugin_marketplace_files >> "$temp_raw"
+
+    # Parse enabledPlugins from all settings files (reverse precedence order)
+    # User scope (lowest priority)
+    parse_enabled_plugins "$HOME/.claude/settings.json" "user" >> "$temp_raw"
+    parse_enabled_plugins "$HOME/.claude/settings.local.json" "user" >> "$temp_raw"
+
+    # Project scope
+    parse_enabled_plugins "./.claude/settings.json" "project" >> "$temp_raw"
+
+    # Local scope (highest priority)
+    parse_enabled_plugins "./.claude/settings.local.json" "local" >> "$temp_raw"
 
     cat "$temp_raw"
     rm -f "$temp_raw"
@@ -905,60 +1068,41 @@ prompt_for_migration() {
 
 # Toggle server state in state file
 # Args: $1 - server name (may have prefix like "[ON ] server-name (scope)")
-# Handles migration for direct servers
+# NEW: Direct servers now toggle normally (quick-disable)
 toggle_server() {
     local raw_input="$1"
-
-    # Strip ANSI codes, prefixes, and scope suffix to get clean server name
     local server
-    server=$(echo "$raw_input" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^\[ON \] *//' | sed 's/^\[OFF\] *//' | sed 's/^\[⚠ \] *//' | sed 's/^     *//' | sed 's/ *(.*)$//')
+    server=$(extract_server_name "$raw_input")
 
-    # Get source type and current state
-    local source_type current_state
+    # Get source type
+    local source_type
     source_type=$(get_server_source_type "$server")
 
-    while IFS=: read -r state srv scope file stype; do
-        if [[ "$srv" == "$server" ]]; then
-            current_state="$state"
-            break
-        fi
-    done < "$STATE_FILE"
-
-    # Check if this is a direct server and user is trying to disable it
+    # NEW: Direct servers now toggle normally (quick-disable)
     if [[ "$source_type" == "direct-global" ]] || [[ "$source_type" == "direct-local" ]]; then
-        # Check if server is currently enabled and user wants to disable
-        if [[ "$current_state" == "on" ]]; then
-            # Check if already migrated
-            if ! is_server_migrated "$server"; then
-                # Get definition location
-                local location def_file
-                location=$(get_server_definition_location "$server")
-                def_file=$(echo "$location" | cut -d: -f2-)
+        # Simple toggle in state file (same as MCPJSON)
+        local temp_state
+        temp_state=$(mktemp)
 
-                # Prompt for migration
-                if prompt_for_migration "$server" "$source_type" "$def_file"; then
-                    # Perform migration
-                    if migrate_server_to_project_mcpjson "$server"; then
-                        # Reload servers after migration
-                        load_servers
-                        msg_info "Reloaded server list - server is now controllable"
-                        sleep 1
-                        return 0
-                    else
-                        msg_error "Migration failed"
-                        sleep 2
-                        return 1
-                    fi
+        while IFS=: read -r state srv scope file stype; do
+            if [[ "$srv" == "$server" ]]; then
+                # Toggle state, preserve scope, file, and source type
+                if [[ "$state" == "on" ]]; then
+                    echo "off:$srv:$scope:$file:$stype" >> "$temp_state"
                 else
-                    # User cancelled migration
-                    return 0
+                    echo "on:$srv:$scope:$file:$stype" >> "$temp_state"
                 fi
+            else
+                # Keep unchanged
+                echo "$state:$srv:$scope:$file:$stype" >> "$temp_state"
             fi
-            # If already migrated, fall through to normal toggle
-        fi
+        done < "$STATE_FILE"
+
+        mv "$temp_state" "$STATE_FILE"
+        return 0
     fi
 
-    # Normal toggle (for mcpjson servers or re-enabling direct servers after migration)
+    # EXISTING: MCPJSON servers (no changes)
     local temp_state
     temp_state=$(mktemp)
 
@@ -1007,10 +1151,8 @@ add_server() {
 # Args: $1 - server name (may have prefix and scope suffix)
 remove_server() {
     local raw_input="$1"
-
-    # Strip ANSI codes, prefixes, and scope suffix
     local server
-    server=$(echo "$raw_input" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^\[ON \] *//' | sed 's/^\[OFF\] *//' | sed 's/^\[⚠ \] *//' | sed 's/^     *//' | sed 's/ *(.*)$//')
+    server=$(extract_server_name "$raw_input")
 
     # Remove from state file (match server name in column 2)
     local temp_state
@@ -1049,6 +1191,53 @@ disable_all_servers() {
     mv "$temp_state" "$STATE_FILE"
 }
 
+# Get plugin value from project-level settings file
+# Args: $1 - plugin server name (e.g., "mcp-fetch@claudecode-marketplace")
+# Returns: "true", "false", or "unset"
+get_project_plugin_value() {
+    local plugin="$1"
+    local project_settings="./.claude/settings.json"
+
+    if [[ ! -f "$project_settings" ]]; then
+        echo "unset"
+        return
+    fi
+
+    local value
+    value=$(jq -r --arg plugin "$plugin" 'if .enabledPlugins | has($plugin) then .enabledPlugins[$plugin] else "unset" end' "$project_settings" 2>/dev/null)
+    echo "$value"
+}
+
+# Check if a plugin is enabled in any lower-priority scope
+# Args: $1 - plugin server name (e.g., "mcp-fetch@claudecode-marketplace")
+# Returns: 0 if plugin is enabled in lower-priority scope, 1 if not
+# This is used to decide: write explicit false (override) vs omit (avoid UI disappearance)
+plugin_enabled_in_lower_scope() {
+    local plugin="$1"
+    local target_scope="local"  # We write to local scope
+    local target_priority
+    target_priority=$(get_scope_priority "$target_scope")
+
+    # Parse all sources to find plugin enable directives in lower-priority scopes
+    local all_sources
+    all_sources=$(discover_and_parse_all_sources)
+
+    while IFS=: read -r type srv scope file; do
+        [[ "$srv" != "$plugin" ]] && continue
+        [[ "$type" != "enable" ]] && continue
+
+        local priority
+        priority=$(get_scope_priority "$scope")
+
+        # If this enable directive has lower priority than our target, return true
+        if [[ $priority -lt $target_priority ]]; then
+            return 0
+        fi
+    done <<< "$all_sources"
+
+    return 1
+}
+
 # Save state file to project-local settings only (./.claude/settings.local.json)
 # Never modifies global user settings
 save_state_to_settings() {
@@ -1060,34 +1249,62 @@ save_state_to_settings() {
         msg_info "Created .claude/ directory"
     fi
 
-    # Parse state file into enabled and disabled arrays (server names only)
-    local enabled_servers=()
-    local disabled_servers=()
+    # Parse state file into categories
+    local enabled_mcpjson=()
+    local disabled_mcpjson=()
+    local disabled_direct=()  # Track Direct servers separately
+    declare -A enabled_plugins  # Track plugin servers (name -> state)
 
     while IFS=: read -r state server scope file source_type; do
         [[ -z "$server" ]] && continue
 
+        # Handle Direct servers separately
+        if [[ "$source_type" == "direct-global" ]] || [[ "$source_type" == "direct-local" ]]; then
+            if [[ "$state" == "off" ]]; then
+                disabled_direct+=("$server")
+            fi
+            continue
+        fi
+
+        # Handle Plugin servers with smart precedence-aware strategy
+        if [[ "$source_type" == "plugin" ]]; then
+            if [[ "$state" == "on" ]]; then
+                # Plugin is enabled - write explicit true
+                enabled_plugins["$server"]="true"
+            else
+                # Plugin is disabled - check if we need explicit false or omit
+                if plugin_enabled_in_lower_scope "$server"; then
+                    # Plugin is enabled at lower-priority scope (e.g., project/user)
+                    # Write explicit false to override it
+                    enabled_plugins["$server"]="false"
+                fi
+                # Otherwise omit (plugin not enabled elsewhere, avoid UI disappearance)
+            fi
+            continue
+        fi
+
+        # MCPJSON servers
         if [[ "$state" == "on" ]]; then
-            enabled_servers+=("$server")
+            enabled_mcpjson+=("$server")
         elif [[ "$state" == "off" ]]; then
-            disabled_servers+=("$server")
+            disabled_mcpjson+=("$server")
         fi
     done < "$STATE_FILE"
 
-    # Build JSON arrays
+    # Build JSON arrays for MCPJSON servers
     local enabled_json
     local disabled_json
 
-    if [[ ${#enabled_servers[@]} -eq 0 ]]; then
+    if [[ ${#enabled_mcpjson[@]} -eq 0 ]]; then
         enabled_json="[]"
     else
-        enabled_json=$(printf '%s\n' "${enabled_servers[@]}" | jq -R . | jq -s -c .)
+        enabled_json=$(printf '%s\n' "${enabled_mcpjson[@]}" | jq -R . | jq -s -c .)
     fi
 
-    if [[ ${#disabled_servers[@]} -eq 0 ]]; then
+    if [[ ${#disabled_mcpjson[@]} -eq 0 ]]; then
         disabled_json="[]"
     else
-        disabled_json=$(printf '%s\n' "${disabled_servers[@]}" | jq -R . | jq -s -c .)
+        disabled_json=$(printf '%s\n' "${disabled_mcpjson[@]}" | jq -R . | jq -s -c .)
     fi
 
     # Initialize with empty object if file doesn't exist
@@ -1096,16 +1313,115 @@ save_state_to_settings() {
         msg_info "Created $target"
     fi
 
-    # Atomic update using temp file (merge with existing settings)
+    # Build enabledPlugins JSON object (with redundancy elimination)
+    local plugins_json="{}"
+    # Safe check for non-empty associative array with set -u
+    local plugin_count=0
+    for _ in "${!enabled_plugins[@]}"; do ((plugin_count++)); done
+
+    if [[ $plugin_count -gt 0 ]]; then
+        # Filter out redundant entries that match project-level values
+        declare -A filtered_plugins
+        for plugin in "${!enabled_plugins[@]}"; do
+            local our_value="${enabled_plugins[$plugin]}"
+            local project_value
+            project_value=$(get_project_plugin_value "$plugin")
+
+            # Only write if:
+            # 1. Value differs from project (override needed), OR
+            # 2. Value is false and project is unset (explicit override of lower-priority enable)
+            if [[ "$our_value" != "$project_value" ]]; then
+                filtered_plugins["$plugin"]="$our_value"
+            fi
+            # Skip if our_value == project_value (redundant)
+        done
+
+        # Build JSON from filtered plugins
+        local filtered_count=0
+        for _ in "${!filtered_plugins[@]}"; do ((filtered_count++)); done
+
+        if [[ $filtered_count -gt 0 ]]; then
+            plugins_json="{"
+            local first=true
+            for plugin in "${!filtered_plugins[@]}"; do
+                if [[ "$first" == "true" ]]; then
+                    first=false
+                else
+                    plugins_json+=","
+                fi
+                plugins_json+="\"$plugin\":${filtered_plugins[$plugin]}"
+            done
+            plugins_json+="}"
+        fi
+    fi
+
+    # Atomic update for MCPJSON servers and plugins
     local temp_file
     temp_file=$(mktemp)
 
     jq --argjson enabled "$enabled_json" \
        --argjson disabled "$disabled_json" \
-       '.enabledMcpjsonServers = $enabled | .disabledMcpjsonServers = $disabled' \
+       --argjson plugins "$plugins_json" \
+       '.enabledMcpjsonServers = $enabled | .disabledMcpjsonServers = $disabled | .enabledPlugins = $plugins' \
        "$target" > "$temp_file"
 
     mv "$temp_file" "$target"
+
+    # NEW: Write Direct servers to ~/.claude.json if any are disabled
+    if [[ ${#disabled_direct[@]} -gt 0 ]]; then
+        write_direct_servers_to_claude_json "${disabled_direct[@]}"
+    else
+        # Clear disabledMcpServers if no Direct servers are disabled
+        write_direct_servers_to_claude_json  # Empty array
+    fi
+}
+
+# ============================================================================
+# DIRECT SERVER WRITE FUNCTIONS
+# ============================================================================
+
+# Write disabled Direct servers to ~/.claude.json .projects[cwd].disabledMcpServers
+# Args: Array of server names to disable
+# Returns: 0 on success, 1 on failure
+write_direct_servers_to_claude_json() {
+    local -a disabled_direct=("$@")
+    local target="$HOME/.claude.json"
+    local cwd=$(pwd)
+
+    # Create timestamped backup
+    local backup="$target.backup.$(date +%Y%m%d_%H%M%S)"
+    if ! cp "$target" "$backup" 2>/dev/null; then
+        msg_error "Failed to create backup of $target"
+        return 1
+    fi
+    msg_info "Backup created: $backup"
+
+    # Build disabled array JSON
+    local disabled_json
+    if [[ ${#disabled_direct[@]} -eq 0 ]]; then
+        disabled_json="[]"
+    else
+        disabled_json=$(printf '%s\n' "${disabled_direct[@]}" | jq -R . | jq -s -c .)
+    fi
+
+    # Atomic update to .projects[cwd].disabledMcpServers
+    local temp_file=$(mktemp)
+
+    jq --arg cwd "$cwd" --argjson disabled "$disabled_json" \
+       '.projects[$cwd].disabledMcpServers = $disabled' \
+       "$target" > "$temp_file"
+
+    # Validate JSON
+    if ! jq empty "$temp_file" 2>/dev/null; then
+        msg_error "JSON validation failed, rolling back"
+        rm "$temp_file"
+        return 1
+    fi
+
+    mv "$temp_file" "$target"
+    msg_success "Updated $target (.projects[$cwd].disabledMcpServers)"
+
+    return 0
 }
 
 # ============================================================================
@@ -1121,23 +1437,34 @@ generate_fzf_list() {
     fi
 
     local dim='\033[2m'  # Dim/grey color for scope labels
-    local warning_color='\033[0;33m'  # Yellow for warning
 
     while IFS=: read -r state server scope file source_type; do
         [[ -z "$server" ]] && continue
 
-        # Check if server is a direct server (always enabled) and not yet migrated
-        local is_direct=false
+        # Direct servers: Show as ON/OFF with [direct] badge
         if [[ "$source_type" == "direct-global" ]] || [[ "$source_type" == "direct-local" ]]; then
-            if ! is_server_migrated "$server"; then
-                is_direct=true
+            local badge="${COLOR_YELLOW}[direct]${COLOR_RESET}"
+            if [[ "$state" == "on" ]]; then
+                echo -e "${COLOR_GREEN}[ON ]${COLOR_RESET} $server ${badge} ${dim}($scope, $source_type)${COLOR_RESET}"
+            else
+                echo -e "${COLOR_RED}[OFF]${COLOR_RESET} $server ${badge} ${dim}($scope, $source_type)${COLOR_RESET}"
             fi
+            continue
         fi
 
-        if [[ "$is_direct" == "true" ]]; then
-            # Direct servers show warning indicator
-            echo -e "${warning_color}[⚠ ]${COLOR_RESET} $server ${dim}($scope, always-on)${COLOR_RESET}"
-        elif [[ "$state" == "on" ]]; then
+        # Plugin servers: Show with badge
+        if [[ "$source_type" == "plugin" ]]; then
+            local badge="${COLOR_BLUE}[plugin]${COLOR_RESET}"
+            if [[ "$state" == "on" ]]; then
+                echo -e "${COLOR_GREEN}[ON ]${COLOR_RESET} $server ${badge} ${dim}($scope)${COLOR_RESET}"
+            else
+                echo -e "${COLOR_RED}[OFF]${COLOR_RESET} $server ${badge} ${dim}($scope)${COLOR_RESET}"
+            fi
+            continue
+        fi
+
+        # MCPJSON servers (existing logic)
+        if [[ "$state" == "on" ]]; then
             echo -e "${COLOR_GREEN}[ON ]${COLOR_RESET} $server ${dim}($scope, $source_type)${COLOR_RESET}"
         elif [[ "$state" == "off" ]]; then
             echo -e "${COLOR_RED}[OFF]${COLOR_RESET} $server ${dim}($scope, $source_type)${COLOR_RESET}"
@@ -1149,10 +1476,8 @@ generate_fzf_list() {
 # Args: $1 - full line from fzf (e.g., "[ON ] server-name (scope)")
 generate_preview() {
     local raw_input="$1"
-
-    # Strip ANSI codes, prefixes, and scope suffix
     local server
-    server=$(echo "$raw_input" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^\[ON \] *//' | sed 's/^\[OFF\] *//' | sed 's/^\[⚠ \] *//' | sed 's/^     *//' | sed 's/ *(.*)$//')
+    server=$(extract_server_name "$raw_input")
 
     if [[ -z "$server" ]]; then
         echo "No server selected"
@@ -1208,19 +1533,97 @@ generate_preview() {
     echo "$preview_line"
     echo ""
 
+    # NEW: Direct server preview
+    if [[ "$source_type" == "direct-global" ]] || [[ "$source_type" == "direct-local" ]]; then
+        # Source type
+        echo -e "${COLOR_CYAN}Source Type${COLOR_RESET}"
+        if [[ "$source_type" == "direct-global" ]]; then
+            echo -e "  ${COLOR_YELLOW}Direct (global)${COLOR_RESET}"
+        else
+            echo -e "  ${COLOR_YELLOW}Direct (local)${COLOR_RESET}"
+        fi
+        echo ""
+
+        # Definition source
+        echo -e "${COLOR_CYAN}Definition${COLOR_RESET}"
+        echo -e "  Scope: $def_scope"
+        echo -e "  File:  $(abbreviate_path "$def_file")"
+        echo ""
+
+        # Status and control method
+        echo -e "${COLOR_CYAN}Status & Control${COLOR_RESET}"
+        if [[ "$current_state" == "off" ]]; then
+            echo -e "  ${COLOR_RED}Disabled${COLOR_RESET} (quick-disable)"
+            echo -e "  • Disabled via ${COLOR_CYAN}$(abbreviate_path "$HOME/.claude.json")${COLOR_RESET}"
+            echo -e "  • Location: ${COLOR_CYAN}.projects[cwd].disabledMcpServers${COLOR_RESET}"
+            echo -e "  • Definition remains global"
+            echo ""
+            echo -e "Press ${COLOR_CYAN}SPACE${COLOR_RESET} to re-enable"
+            echo -e "Press ${COLOR_CYAN}ALT-M${COLOR_RESET} to migrate to project"
+        else
+            echo -e "  ${COLOR_GREEN}Enabled${COLOR_RESET}"
+            echo -e "  • Definition in: ${COLOR_CYAN}$(abbreviate_path "$def_file")${COLOR_RESET}"
+            echo ""
+            echo -e "Press ${COLOR_CYAN}SPACE${COLOR_RESET} to quick-disable"
+            echo -e "Press ${COLOR_CYAN}ALT-M${COLOR_RESET} to migrate to project"
+        fi
+
+        echo ""
+        echo "$preview_line"
+        echo -e "${COLOR_WHITE}Quick Disable${COLOR_RESET} - Fast, modifies ~/.claude.json .projects[cwd]"
+        echo -e "${COLOR_WHITE}Migration (ALT-M)${COLOR_RESET} - Full ownership, project-local"
+        return
+    fi
+
+    # Plugin server preview
+    if [[ "$source_type" == "plugin" ]]; then
+        # Source type
+        echo -e "${COLOR_CYAN}Source Type${COLOR_RESET}"
+        echo -e "  ${COLOR_BLUE}Marketplace Plugin${COLOR_RESET}"
+        echo ""
+
+        # Definition source
+        echo -e "${COLOR_CYAN}Definition${COLOR_RESET}"
+        echo -e "  Scope: $def_scope"
+        echo -e "  File:  $(abbreviate_path "$def_file")"
+        echo ""
+
+        # Status and control source
+        echo -e "${COLOR_CYAN}Status & Control${COLOR_RESET}"
+        if [[ "$current_state" == "off" ]]; then
+            echo -e "  ${COLOR_RED}Disabled${COLOR_RESET}"
+            if [[ -n "$state_scope" ]]; then
+                echo -e "  • State from: ${COLOR_CYAN}$(abbreviate_path "$state_file")${COLOR_RESET} ($state_scope)"
+            fi
+            echo -e "  • Controlled via ${COLOR_CYAN}enabledPlugins${COLOR_RESET}"
+            echo -e "  • Hidden from Claude MCP menu when disabled"
+            echo ""
+            echo -e "Press ${COLOR_CYAN}SPACE${COLOR_RESET} to enable"
+        else
+            echo -e "  ${COLOR_GREEN}Enabled${COLOR_RESET}"
+            if [[ -n "$state_scope" ]]; then
+                echo -e "  • State from: ${COLOR_CYAN}$(abbreviate_path "$state_file")${COLOR_RESET} ($state_scope)"
+            fi
+            echo -e "  • Controlled via ${COLOR_CYAN}enabledPlugins${COLOR_RESET}"
+            echo ""
+            echo -e "Press ${COLOR_CYAN}SPACE${COLOR_RESET} to disable (hides from Claude)"
+        fi
+
+        echo ""
+        echo "$preview_line"
+        echo -e "${COLOR_YELLOW}Note:${COLOR_RESET} To delete this plugin permanently,"
+        echo "use the Claude MCP menu (not this tool)."
+        echo "$preview_line"
+        echo ""
+        echo -e "Changes write to:"
+        echo "  ./.claude/settings.local.json (enabledPlugins)"
+        return
+    fi
+
+    # MCPJSON server preview
     # Source type
     echo -e "${COLOR_CYAN}Source Type${COLOR_RESET}"
-    case "$source_type" in
-        mcpjson)
-            echo -e "  ${COLOR_GREEN}MCP.json${COLOR_RESET} (controllable)"
-            ;;
-        direct-global)
-            echo -e "  ${COLOR_YELLOW}Direct (global)${COLOR_RESET} - always enabled"
-            ;;
-        direct-local)
-            echo -e "  ${COLOR_YELLOW}Direct (local)${COLOR_RESET} - always enabled"
-            ;;
-    esac
+    echo -e "  ${COLOR_GREEN}MCP.json${COLOR_RESET} (controllable)"
     echo ""
 
     # Definition source
@@ -1231,45 +1634,10 @@ generate_preview() {
 
     # Status
     echo -e "${COLOR_CYAN}Status${COLOR_RESET}"
-
-    # Check if this is a direct server that hasn't been migrated
-    if [[ "$source_type" == "direct-global" ]] || [[ "$source_type" == "direct-local" ]]; then
-        if ! is_server_migrated "$server"; then
-            # Direct server - always enabled
-            local warning_line=$(gen_line "═" 40)
-            echo -e "  ${COLOR_YELLOW}⚠  Always Enabled${COLOR_RESET}"
-            echo ""
-            echo -e "${COLOR_YELLOW}${warning_line}${COLOR_RESET}"
-            echo -e "${COLOR_WHITE}Cannot be disabled in current location${COLOR_RESET}"
-            echo -e "${COLOR_YELLOW}${warning_line}${COLOR_RESET}"
-            echo ""
-            echo "To enable project-level control:"
-            echo -e "  Press ${COLOR_CYAN}SPACE${COLOR_RESET} to migrate to ./.mcp.json"
-            echo ""
-            echo "Migration will:"
-            echo -e "  ${COLOR_GREEN}•${COLOR_RESET} Move definition to ./.mcp.json"
-            echo -e "  ${COLOR_GREEN}•${COLOR_RESET} Remove from $def_file"
-            echo -e "  ${COLOR_GREEN}•${COLOR_RESET} Enable disable/enable toggling"
-            echo -e "  ${COLOR_YELLOW}•${COLOR_RESET} Backup created automatically"
-            echo ""
-            echo "$preview_line"
-            echo -e "Press ${COLOR_CYAN}SPACE${COLOR_RESET} to migrate and disable"
-            return
-        else
-            # Direct server that has been migrated
-            if [[ "$current_state" == "on" ]]; then
-                echo -e "  ${COLOR_GREEN}Enabled${COLOR_RESET} (migrated)"
-            else
-                echo -e "  ${COLOR_RED}Disabled${COLOR_RESET} (migrated)"
-            fi
-        fi
+    if [[ "$current_state" == "on" ]]; then
+        echo -e "  ${COLOR_GREEN}Enabled${COLOR_RESET}"
     else
-        # MCPJSON server - normal controllable server
-        if [[ "$current_state" == "on" ]]; then
-            echo -e "  ${COLOR_GREEN}Enabled${COLOR_RESET}"
-        else
-            echo -e "  ${COLOR_RED}Disabled${COLOR_RESET}"
-        fi
+        echo -e "  ${COLOR_RED}Disabled${COLOR_RESET}"
     fi
     echo ""
 
@@ -1314,10 +1682,8 @@ add_server_flow() {
 # Args: $1 - server line from fzf
 remove_server_flow() {
     local raw_input="$1"
-
-    # Strip to get server name
     local server
-    server=$(echo "$raw_input" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^\[ON \] *//' | sed 's/^\[OFF\] *//' | sed 's/^     *//')
+    server=$(extract_server_name "$raw_input")
 
     if [[ -z "$server" ]]; then
         return 0
@@ -1341,23 +1707,68 @@ remove_server_flow() {
     fi
 }
 
+# Migration flow for Direct servers (Option B - Alternative)
+# Args: $1 - server line from fzf
+migrate_direct_server_flow() {
+    local raw_input="$1"
+    local server
+    server=$(extract_server_name "$raw_input")
+
+    if [[ -z "$server" ]]; then
+        return 0
+    fi
+
+    # Check if this is a Direct server
+    local source_type
+    source_type=$(get_server_source_type "$server")
+
+    if [[ "$source_type" != "direct-global" ]] && [[ "$source_type" != "direct-local" ]]; then
+        # Redirect to tty for message
+        exec < /dev/tty
+        echo ""
+        msg_warning "Migration only available for Direct servers"
+        sleep 1
+        return 0
+    fi
+
+    # Get definition location
+    local location def_file
+    location=$(get_server_definition_location "$server")
+    def_file=$(echo "$location" | cut -d: -f2-)
+
+    # Existing migration prompt and logic
+    if prompt_for_migration "$server" "$source_type" "$def_file"; then
+        if migrate_server_to_project_mcpjson "$server"; then
+            load_servers
+            msg_info "Reloaded server list - server is now controllable"
+            sleep 1
+        else
+            msg_error "Migration failed"
+            sleep 2
+        fi
+    fi
+}
+
 # ============================================================================
 # MAIN TUI LAUNCHER
 # ============================================================================
 
 # Launch fzf TUI with all bindings and interactions
 launch_fzf_tui() {
-    # Export functions and variables for fzf subshells
+    # Export current directory and functions for fzf subshells (preview runs in different pwd)
+    export MCP_CURRENT_DIR="$(pwd)"
     export STATE_FILE
     export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_BLUE COLOR_CYAN COLOR_WHITE
     export MARK_ERROR MARK_SUCCESS MARK_WARNING MARK_INFO
-    export -f msg_header gen_line get_term_width
+    export -f msg_header gen_line get_term_width abbreviate_path extract_server_name
     export -f toggle_server generate_fzf_list add_server remove_server
     export -f enable_all_servers disable_all_servers
-    export -f add_server_flow remove_server_flow msg_error msg_warning msg_success msg_info
+    export -f add_server_flow remove_server_flow migrate_direct_server_flow msg_error msg_warning msg_success msg_info
     export -f discover_and_parse_all_sources get_scope_priority generate_preview
     export -f parse_settings_file parse_mcp_json_file parse_claude_json_file detect_file_format
+    export -f parse_plugin_marketplace_files parse_enabled_plugins
     export -f is_server_migrated mark_server_migrated get_server_source_type
+    export -f plugin_enabled_in_lower_scope get_project_plugin_value
     export -f get_server_definition_location extract_server_definition
     export -f migrate_server_to_project_mcpjson prompt_for_migration load_servers
 
@@ -1404,10 +1815,10 @@ launch_fzf_tui() {
     # Use printf to properly interpret escape sequences
     printf -v header "%b" "${shortcuts_line}
 ${COLOR_WHITE}Shortcuts:${COLOR_RESET}
-${COLOR_CYAN}│${COLOR_RESET} ${COLOR_WHITE}[SPACE]${COLOR_RESET}  Toggle       ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[ENTER]${COLOR_RESET}  Save & Exit
-${COLOR_CYAN}│${COLOR_RESET} ${COLOR_WHITE}[Ctrl-A]${COLOR_RESET} Add Server   ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[Ctrl-X]${COLOR_RESET} Remove Server
-${COLOR_CYAN}│${COLOR_RESET} ${COLOR_WHITE}[Alt-E]${COLOR_RESET}  Enable All   ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[Alt-D]${COLOR_RESET}  Disable All
-${COLOR_CYAN}│${COLOR_RESET} ${COLOR_WHITE}[ESC]${COLOR_RESET}    Cancel
+${COLOR_CYAN}│${COLOR_RESET} ${COLOR_WHITE}[SPACE]${COLOR_RESET}     Toggle       ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[ENTER]${COLOR_RESET} Save & Exit
+${COLOR_CYAN}│${COLOR_RESET} ${COLOR_WHITE}[ALT-M]${COLOR_RESET}     Migrate      ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[CTRL-A]${COLOR_RESET} Add Server
+${COLOR_CYAN}│${COLOR_RESET} ${COLOR_WHITE}[CTRL-X]${COLOR_RESET}    Remove       ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[ALT-E]${COLOR_RESET} Enable All
+${COLOR_CYAN}│${COLOR_RESET} ${COLOR_WHITE}[ALT-D]${COLOR_RESET}     Disable All  ${COLOR_CYAN}│${COLOR_RESET}  ${COLOR_WHITE}[ESC]${COLOR_RESET} Cancel
 ${shortcuts_line}"
 
     # Run fzf with dynamic bindings
@@ -1424,8 +1835,9 @@ ${shortcuts_line}"
         --marker="→" \
         --header="$header" \
         --preview="generate_preview {}" \
-        --preview-window="right:40%:wrap" \
+        --preview-window="right:45%:wrap" \
         --bind="space:execute(toggle_server {})+reload(generate_fzf_list)+refresh-preview" \
+        --bind="alt-m:execute(migrate_direct_server_flow {})+reload(generate_fzf_list)+refresh-preview" \
         --bind="alt-e:execute-silent(enable_all_servers)+reload(generate_fzf_list)+refresh-preview" \
         --bind="alt-d:execute-silent(disable_all_servers)+reload(generate_fzf_list)+refresh-preview" \
         --bind="ctrl-a:execute(add_server_flow)+reload(generate_fzf_list)+refresh-preview" \

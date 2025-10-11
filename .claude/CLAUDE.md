@@ -163,13 +163,14 @@ Display: [OFF] fetch (project)
 4. Merges servers with precedence resolution
 5. Presents unified list in `fzf` TUI with scope labels: `[ON ] server (scope)`
 6. User interacts:
-   - `SPACE` - Toggle server on/off
+   - `SPACE` - Toggle server on/off (quick-disable for Direct servers)
+   - `ALT-M` - Migrate Direct server to project
    - `CTRL-A` - Add new server
    - `CTRL-X` - Remove server
    - `ALT-E` - Enable all servers
    - `ALT-D` - Disable all servers
    - `ENTER` - Save changes
-7. Changes saved atomically to `./.claude/settings.local.json` only
+7. Changes saved atomically (MCPJSON → `./.claude/settings.local.json`, Direct → `~/.claude.json`)
 8. Launches Claude with updated configuration
 
 ## Development Commands
@@ -319,26 +320,28 @@ Current Status: Enabled
 
 Direct servers (from `~/.claude.json`) have **two control methods**:
 
-**Option A: Quick Disable** (Default, modifies global file)
+**Option A: Quick Disable** (Default, via SPACE key)
 - Writes to `~/.claude.json` `.projects[cwd].disabledMcpServers`
 - Server definition stays in global config
 - Project-specific disable only
 - Quick, single-step process
 - Modifies global file but in project-scoped section
+- **User Action**: Press `SPACE` to toggle
 
-**Option B: Migration** (Alternative, full project ownership)
+**Option B: Migration** (Alternative, via ALT-M key)
 - Moves server definition to `./.mcp.json`
 - Controlled via `./.claude/settings.local.json`
 - Full project ownership of server
 - Multi-step process with validation
 - No global file modification after migration
+- **User Action**: Press `ALT-M` to initiate migration
 
 ### Quick Disable Process (Option A - Default)
 
-When user toggles a direct server OFF:
+When user presses `SPACE` on a Direct server:
 
-1. **Detection**: Tool detects server is "direct" type
-2. **Default Action**: Add server to `~/.claude.json` `.projects[cwd].disabledMcpServers`
+1. **Toggle**: Server state toggles ON ↔ OFF in state file
+2. **Save**: On ENTER, changes written to `~/.claude.json` `.projects[cwd].disabledMcpServers`
 3. **Backup**: Automatic timestamped backup of `~/.claude.json` created
 4. **Write**: Atomic update to `.projects[cwd]` section
 5. **Validation**: Verify JSON integrity
@@ -348,13 +351,13 @@ When user toggles a direct server OFF:
 
 ### Migration Process (Option B - Alternative)
 
-When user chooses migration (via menu or keybinding):
+When user presses `ALT-M` on a Direct server:
 
 1. **Detection**: Tool detects server is "direct" type
 2. **Prompt**: User is shown migration options:
    - `[y]` Migrate to project (full ownership)
    - `[v]` View full server definition first
-   - `[n]` Cancel (use quick disable instead)
+   - `[n]` Cancel migration
 3. **Backup**: Automatic timestamped backup of `~/.claude.json` created
 4. **Migration Steps** (if user confirms):
    - Extract server definition from `~/.claude.json`
@@ -383,6 +386,77 @@ When user chooses migration (via menu or keybinding):
 - **JSON Validation**: Validates both source and destination files
 - **Rollback on Failure**: Restores backup if any step fails
 - **Error Recovery**: Detailed error messages guide user
+
+## Configuration Precedence Reference
+
+### Control Array Precedence (by Location)
+
+The effectiveness of control arrays depends on their location:
+
+| Control Array | Valid Locations | Invalid Locations | Effect |
+|---------------|----------------|-------------------|--------|
+| `enabledMcpjsonServers` | `.claude/settings*.json` | `~/.claude.json` | Controls .mcp.json servers |
+| `disabledMcpjsonServers` | `.claude/settings*.json` | `~/.claude.json` | Controls .mcp.json servers |
+| `disabledMcpServers` | `~/.claude.json` (root or `.projects[cwd]`) | `.claude/settings*.json` | Controls Direct servers |
+| `enabledPlugins` | `.claude/settings*.json` | `~/.claude.json` | Controls marketplace plugins |
+| `enableAllProjectMcpServers` | `.claude/settings*.json` | `~/.claude.json` | Master switch for .mcp.json servers |
+
+### Scope Precedence (Highest to Lowest)
+
+When the same control exists in multiple scopes:
+
+| Priority | Scope | Files | Overrides |
+|----------|-------|-------|-----------|
+| 3 (Highest) | **Local** | `./.claude/settings.local.json` | Project + User |
+| 2 | **Project** | `./.claude/settings.json` | User only |
+| 1 (Lowest) | **User** | `~/.claude/settings.json`, `~/.claude/settings.local.json` | None |
+
+**Special Case**: `disabledMcpServers` in `~/.claude.json`:
+- Root level = user scope (priority 1)
+- `.projects[cwd]` = local scope (priority 3)
+
+### Server Definition Precedence
+
+When the same server is defined in multiple locations:
+
+| Priority | Location | File | Notes |
+|----------|----------|------|-------|
+| 3 (Highest) | Local/Project | `./.claude/settings.local.json`, `./.mcp.json` | Project override |
+| 2 | Project | `./.claude/settings.json`, `./.mcp.json` | Shared project config |
+| 1 (Lowest) | User | `~/.claude.json`, `~/.mcp.json`, `~/.claude/settings.json` | Global default |
+
+**Important**: Definition precedence and control precedence are resolved **independently**.
+
+### Precedence Resolution Examples
+
+**Example 1: MCPJSON Server**
+```
+User scope: fetch enabled in ~/.claude/settings.json
+Project scope: fetch disabled in ./.claude/settings.json
+Result: DISABLED (project scope wins)
+```
+
+**Example 2: Direct Server**
+```
+User scope: time defined in ~/.claude.json root .mcpServers
+Local scope: time disabled in ~/.claude.json .projects[cwd].disabledMcpServers
+Result: DISABLED (local scope disabledMcpServers wins)
+```
+
+**Example 3: Plugin Server**
+```
+User scope: mcp-fetch@claudecode-marketplace = true in ~/.claude/settings.json
+Project scope: mcp-fetch@claudecode-marketplace = false in ./.claude/settings.json
+Result: DISABLED (project scope wins, but plugin disappears from UI)
+```
+
+**Example 4: Mixed Definition and Control**
+```
+Definition: stripe defined in ~/.claude.json (user scope)
+Control: stripe disabled in ./.claude/settings.local.json (local scope)
+Result: Uses user definition, but DISABLED by local control
+Display: [OFF] stripe (user, mcpjson)
+```
 
 ## Plugin Control and Marketplace Integration
 
