@@ -953,13 +953,30 @@ migrate_server_to_project_mcpjson() {
     msg_info "Migrating '$server' to ./.mcp.json for project-level control..."
     echo ""
 
-    # Create backup of ~/.claude.json
-    local backup_file="$HOME/.claude.json.backup.$(date +%Y%m%d_%H%M%S)"
+    # Create backup of ~/.claude.json in dedicated backup directory
+    local backup_dir="$HOME/.claude/backups"
+    mkdir -p "$backup_dir"
+    local backup_file="$backup_dir/claude.json.backup.$(date +%Y%m%d_%H%M%S)"
     if ! cp "$def_file" "$backup_file" 2>/dev/null; then
         msg_error "Failed to create backup of $def_file"
         return 1
     fi
     msg_info "Backup created: $backup_file"
+
+    # Cleanup old backups (keep last 5)
+    local backup_count
+    if command -v fd &> /dev/null; then
+        backup_count=$(fd -t f "claude.json.backup." "$backup_dir" 2>/dev/null | wc -l)
+        if [[ $backup_count -gt 5 ]]; then
+            fd -t f "claude.json.backup." "$backup_dir" 2>/dev/null | sort | head -n -5 | xargs rm -f
+        fi
+    else
+        # Fallback to find if fd is not available
+        backup_count=$(find "$backup_dir" -type f -name "claude.json.backup.*" 2>/dev/null | wc -l)
+        if [[ $backup_count -gt 5 ]]; then
+            find "$backup_dir" -type f -name "claude.json.backup.*" 2>/dev/null | sort | head -n -5 | xargs rm -f
+        fi
+    fi
 
     # Extract server definition
     local definition
@@ -1437,15 +1454,13 @@ write_direct_servers_to_claude_json() {
     local target="$HOME/.claude.json"
     local cwd=$(pwd)
 
-    # Create timestamped backup
-    local backup="$target.backup.$(date +%Y%m%d_%H%M%S)"
-    if ! cp "$target" "$backup" 2>/dev/null; then
-        msg_error "Failed to create backup of $target"
+    # Check if file exists first
+    if [[ ! -f "$target" ]]; then
+        msg_error "$target not found"
         return 1
     fi
-    msg_info "Backup created: $backup"
 
-    # Build disabled array JSON
+    # Build the new disabledMcpServers array
     local disabled_json
     if [[ ${#disabled_direct[@]} -eq 0 ]]; then
         disabled_json="[]"
@@ -1453,22 +1468,66 @@ write_direct_servers_to_claude_json() {
         disabled_json=$(printf '%s\n' "${disabled_direct[@]}" | jq -R . | jq -s -c .)
     fi
 
-    # Atomic update to .projects[cwd].disabledMcpServers
-    local temp_file=$(mktemp)
+    # Quick check: compare what we're about to write with what's already there
+    # This avoids expensive temp file creation and hash calculation when no changes needed
+    local current_disabled
+    current_disabled=$(jq -c --arg cwd "$cwd" '.projects[$cwd].disabledMcpServers // []' "$target" 2>/dev/null)
 
-    jq --arg cwd "$cwd" --argjson disabled "$disabled_json" \
+    if [[ "$current_disabled" == "$disabled_json" ]]; then
+        # Already matches - no changes needed
+        return 0
+    fi
+
+    # Content will change - now create temp preview for atomic write
+    local temp_preview=$(mktemp)
+
+    # Write new content to temp file
+    if ! jq --arg cwd "$cwd" --argjson disabled "$disabled_json" \
        '.projects[$cwd].disabledMcpServers = $disabled' \
-       "$target" > "$temp_file"
-
-    # Validate JSON
-    if ! jq empty "$temp_file" 2>/dev/null; then
-        msg_error "JSON validation failed, rolling back"
-        rm "$temp_file"
+       "$target" > "$temp_preview" 2>/dev/null; then
+        msg_error "Failed to write changes to temp file"
+        rm -f "$temp_preview"
         return 1
     fi
 
-    mv "$temp_file" "$target"
-    msg_success "Updated $target (.projects[$cwd].disabledMcpServers)"
+    # Validate JSON before proceeding
+    if ! jq empty "$temp_preview" 2>/dev/null; then
+        msg_error "JSON validation failed"
+        rm -f "$temp_preview"
+        return 1
+    fi
+
+    # Create backup now that we know changes are needed and valid
+    local backup_dir="$HOME/.claude/backups"
+    mkdir -p "$backup_dir"
+    local backup="$backup_dir/claude.json.backup.$(date +%Y%m%d_%H%M%S)"
+
+    if ! cp "$target" "$backup" 2>/dev/null; then
+        msg_error "Failed to create backup of $target"
+        rm -f "$temp_preview"
+        return 1
+    fi
+
+    # Cleanup old backups in background (keep last 5) - non-blocking
+    (
+        local backup_count
+        if command -v fd &> /dev/null; then
+            backup_count=$(fd -t f "claude.json.backup." "$backup_dir" 2>/dev/null | wc -l)
+            if [[ $backup_count -gt 5 ]]; then
+                fd -t f "claude.json.backup." "$backup_dir" 2>/dev/null | sort | head -n -5 | xargs rm -f 2>/dev/null
+            fi
+        else
+            # Fallback to find if fd is not available
+            backup_count=$(find "$backup_dir" -type f -name "claude.json.backup.*" 2>/dev/null | wc -l)
+            if [[ $backup_count -gt 5 ]]; then
+                find "$backup_dir" -type f -name "claude.json.backup.*" 2>/dev/null | sort | head -n -5 | xargs rm -f 2>/dev/null
+            fi
+        fi
+    ) &
+
+    # Atomic update - move temp file to target
+    mv "$temp_preview" "$target"
+    msg_success "Updated $target"
 
     return 0
 }
