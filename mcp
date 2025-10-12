@@ -1276,17 +1276,20 @@ get_project_plugin_value() {
 
 # Check if a plugin is enabled in any lower-priority scope
 # Args: $1 - plugin server name (e.g., "mcp-fetch@claudecode-marketplace")
+#       $2 - cached all_sources output (optional, will fetch if not provided)
 # Returns: 0 if plugin is enabled in lower-priority scope, 1 if not
 # This is used to decide: write explicit false (override) vs omit (avoid UI disappearance)
 plugin_enabled_in_lower_scope() {
     local plugin="$1"
+    local all_sources="${2:-}"
     local target_scope="local"  # We write to local scope
     local target_priority
     target_priority=$(get_scope_priority "$target_scope")
 
-    # Parse all sources to find plugin enable directives in lower-priority scopes
-    local all_sources
-    all_sources=$(discover_and_parse_all_sources)
+    # Use cached sources if provided, otherwise fetch (for backward compat)
+    if [[ -z "$all_sources" ]]; then
+        all_sources=$(discover_and_parse_all_sources)
+    fi
 
     while IFS=: read -r type srv scope file; do
         [[ "$srv" != "$plugin" ]] && continue
@@ -1315,6 +1318,10 @@ save_state_to_settings() {
         msg_info "Created .claude/ directory"
     fi
 
+    # PERFORMANCE: Cache config sources once for all plugin checks (avoid parsing 7 files repeatedly)
+    local cached_sources
+    cached_sources=$(discover_and_parse_all_sources)
+
     # Parse state file into categories
     local enabled_mcpjson=()
     local disabled_mcpjson=()
@@ -1339,7 +1346,7 @@ save_state_to_settings() {
                 enabled_plugins["$server"]="true"
             else
                 # Plugin is disabled - check if we need explicit false or omit
-                if plugin_enabled_in_lower_scope "$server"; then
+                if plugin_enabled_in_lower_scope "$server" "$cached_sources"; then
                     # Plugin is enabled at lower-priority scope (e.g., project/user)
                     # Write explicit false to override it
                     enabled_plugins["$server"]="false"
