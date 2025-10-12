@@ -7,6 +7,10 @@
     <meta name="keywords" content="Claude Code, MCP, Model Context Protocol, context window, optimization, TUI">
     <meta name="author" content="Henrik Söderlund">
 
+    <!-- Preconnect for Google Fonts performance -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
     <!-- Open Graph / Social Media -->
     <meta property="og:type" content="website">
     <meta property="og:title" content="Claude Code MCP Server Selector - Optimize Your Claude Context">
@@ -16,10 +20,41 @@
     <title>Claude Code MCP Server Selector - Optimize Your Claude Context</title>
     <link rel="stylesheet" href="themes.css">
     <link rel="stylesheet" href="style.css">
+
+    <!-- Schema.org structured data for SEO -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Claude Code MCP Server Selector",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Linux, macOS",
+        "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "USD"
+        },
+        "description": "Fast TUI for managing Claude Code MCP servers. Optimize your context window by enabling only the servers you need. Lightning-fast project-local control with keyboard-first workflow.",
+        "url": "https://henkisdabro.github.io/Claude-Code-MCP-Server-Selector/",
+        "author": {
+            "@type": "Person",
+            "name": "Henrik Söderlund",
+            "url": "https://www.henriksoderlund.com"
+        },
+        "downloadUrl": "https://github.com/henkisdabro/Claude-Code-MCP-Server-Selector",
+        "softwareVersion": "1.0.0",
+        "screenshot": "https://henkisdabro.github.io/Claude-Code-MCP-Server-Selector/demo.gif",
+        "keywords": "Claude Code, MCP, Model Context Protocol, context window, optimization, TUI, developer tools",
+        "license": "https://github.com/henkisdabro/Claude-Code-MCP-Server-Selector/blob/main/LICENSE"
+    }
+    </script>
 </head>
 <body>
+    <!-- Skip to main content link for screen readers -->
+    <a href="#hero" class="skip-to-main">Skip to main content</a>
+
     <!-- Navigation -->
-    <nav class="nav">
+    <nav class="nav" role="navigation" aria-label="Main navigation">
         <div class="container nav-container">
             <div class="nav-brand">
                 <svg class="brand-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -27,7 +62,15 @@
                 </svg>
                 <span class="brand-text">Claude Code MCP Server Selector</span>
             </div>
-            <div class="nav-links">
+
+            <!-- Mobile menu toggle button -->
+            <button class="nav-toggle" aria-label="Toggle navigation menu" aria-expanded="false">
+                <span class="hamburger-line"></span>
+                <span class="hamburger-line"></span>
+                <span class="hamburger-line"></span>
+            </button>
+
+            <div class="nav-links" id="nav-menu">
                 <a href="#features" class="nav-link">Features</a>
                 <a href="#demo" class="nav-link">Demo</a>
                 <a href="#install" class="nav-link">Install</a>
@@ -42,7 +85,8 @@
     </nav>
 
     <!-- Hero Section -->
-    <section class="hero" id="hero">
+    <main>
+    <section class="hero" id="hero" role="banner">
         <div class="container hero-container">
             <div class="hero-content">
                 <!-- ASCII Art Masthead -->
@@ -167,7 +211,11 @@
         <div class="container">
             <h2 class="section-title">See It In Action</h2>
             <div class="demo-container">
-                <img src="demo.gif" alt="MCP Server Selector TUI Demo" class="demo-image">
+                <img src="demo.gif"
+                     alt="MCP Server Selector TUI Demo showing interactive server selection with real-time visual feedback"
+                     class="demo-image"
+                     loading="lazy"
+                     width="1100
                 <p class="demo-caption">Interactive TUI powered by fzf - toggle servers instantly with visual feedback</p>
             </div>
         </div>
@@ -309,7 +357,7 @@
 
                 <div class="keybindings">
                     <h3>Keybindings</h3>
-                    <div class="keybindings-grid">
+                    <div class="keybindings-grid" role="list">
                         <div class="keybinding">
                             <kbd>SPACE</kbd>
                             <span>Toggle server (quick-disable for Direct)</span>
@@ -380,8 +428,10 @@
         </div>
     </section>
 
+    </main>
+
     <!-- Footer -->
-    <footer class="footer">
+    <footer class="footer" role="contentinfo">
         <div class="container footer-container">
             <div class="footer-content">
                 <p class="footer-credit">
