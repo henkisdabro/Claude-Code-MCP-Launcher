@@ -11,7 +11,7 @@ set -euo pipefail
 # ============================================================================
 
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly VERSION="1.0.0"
+readonly VERSION="1.2.0"
 
 # Color codes
 readonly COLOR_RESET='\033[0m'

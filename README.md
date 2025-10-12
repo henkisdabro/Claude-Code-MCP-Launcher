@@ -70,6 +70,18 @@ The tool will:
 
 **Pro tip:** Exit Claude before running this tool to refresh with new settings. Enable only 2-3 servers per session for maximum efficiency.
 
+#### Passing Arguments to Claude Code
+
+You can pass any command-line arguments directly to Claude Code through the selector:
+
+```bash
+mcp --help                    # Shows Claude Code help
+mcp /path/to/project          # Opens specific project after selection
+mcp --version                 # Shows Claude Code version
+```
+
+The tool acts as a transparent wrapper - after you configure your servers and press ENTER, all arguments are forwarded to Claude Code automatically.
+
 ### Keybindings
 
 | Key | Action |
